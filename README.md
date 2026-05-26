@@ -1,5 +1,5 @@
 # mm2-script
-- Unfortunately, auto aim doesn't work, and you might have performance issues using this script.
+- OUTDATED, due to new version of roblox, you can get ban really easily using this script as roblox can detect it. Prob will fix this in the future when I feel like it, for now just use some other script like AetherHub.
 
 # HOW-TO
 1. Download the lua.
