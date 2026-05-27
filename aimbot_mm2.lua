@@ -1,12 +1,9 @@
--- MM2 Aimbot & ESP - CLEAN VERSION
--- Fixed: GUI, Gun ESP, Role Detection, Auto Aim
-
+-- MM2 Aimbot & ESP
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
-local TweenService = game:GetService("TweenService")
 
 -- Settings
 getgenv().CatSettings = {
@@ -19,8 +16,8 @@ getgenv().CatSettings = {
         MaxDistance = 1000
     },
     Aimbot = {
-        Enabled = false,
-        AutoShoot = true
+        AutoShoot = true,
+        AimbotKey = "C"
     },
     MM2 = {
         GunESP = true,
@@ -30,21 +27,7 @@ getgenv().CatSettings = {
 }
 
 -- Role Detection
-local function GetPlayerRole(player)
-    local character = player.Character
-    if character then
-        if character:FindFirstChild("Knife") then return "Murderer" end
-        if character:FindFirstChild("Gun") then return "Sheriff" end
-    end
-    
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        if backpack:FindFirstChild("Knife") then return "Murderer" end
-        if backpack:FindFirstChild("Gun") then return "Sheriff" end
-    end
-    
-    return "Innocent"
-end
+local RoleCache = {}
 
 local RoleColors = {
     Murderer = Color3.fromRGB(255, 50, 50),
@@ -52,14 +35,41 @@ local RoleColors = {
     Innocent = Color3.fromRGB(120, 255, 120)
 }
 
+local function GetPlayerRole(player)
+    local cached = RoleCache[player]
+    if cached then return cached end
+
+    local char = player.Character
+    if char then
+        if char:FindFirstChild("Knife") then RoleCache[player] = "Murderer"; return "Murderer" end
+        if char:FindFirstChild("Gun") then RoleCache[player] = "Sheriff"; return "Sheriff" end
+    end
+
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        if bp:FindFirstChild("Knife") then RoleCache[player] = "Murderer"; return "Murderer" end
+        if bp:FindFirstChild("Gun") then RoleCache[player] = "Sheriff"; return "Sheriff" end
+    end
+
+    RoleCache[player] = "Innocent"
+    return "Innocent"
+end
+
+local function OnCharacterAdded(player)
+    RoleCache[player] = nil
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function() OnCharacterAdded(player) end)
+end)
+
 -- GUI Setup
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "MM2Hub"
 ScreenGui.Parent = game:GetService("CoreGui")
 ScreenGui.ResetOnSpawn = false
 
--- Colors
-local Colors = {
+local UI = {
     Background = Color3.fromRGB(20, 20, 28),
     Surface = Color3.fromRGB(30, 30, 40),
     Accent = Color3.fromRGB(200, 100, 255),
@@ -67,51 +77,48 @@ local Colors = {
     TextDim = Color3.fromRGB(150, 150, 150)
 }
 
--- Main Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 500, 0, 350)
 MainFrame.Position = UDim2.new(0.5, -250, 0.5, -175)
-MainFrame.BackgroundColor3 = Colors.Background
+MainFrame.BackgroundColor3 = UI.Background
 MainFrame.BorderSizePixel = 0
 MainFrame.Visible = false
 MainFrame.Parent = ScreenGui
 
-local corner = Instance.new("UICorner", MainFrame)
-corner.CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 
--- Title
 local Title = Instance.new("TextLabel", MainFrame)
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "🔪 MM2 Hub"
-Title.TextColor3 = Colors.Accent
+Title.Text = "KAT MM2 Hub"
+Title.TextColor3 = UI.Accent
 Title.TextSize = 20
 Title.Font = Enum.Font.GothamBold
 Title.BackgroundTransparency = 1
 
--- Toggle Button (Cat)
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
 ToggleBtn.Position = UDim2.new(0.02, 0, 0.5, -25)
-ToggleBtn.BackgroundColor3 = Colors.Accent
-ToggleBtn.Text = "🐱"
-ToggleBtn.TextSize = 24
+ToggleBtn.BackgroundColor3 = UI.Accent
+ToggleBtn.Text = "KAT"
+ToggleBtn.TextSize = 18
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.TextColor3 = UI.Text
 ToggleBtn.Parent = ScreenGui
 
-local toggleCorner = Instance.new("UICorner", ToggleBtn)
-toggleCorner.CornerRadius = UDim.new(1, 0)
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
 
 ToggleBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
 end)
 
--- X Button to Close
 local CloseBtn = Instance.new("TextButton", MainFrame)
 CloseBtn.Size = UDim2.new(0, 30, 0, 30)
 CloseBtn.Position = UDim2.new(1, -35, 0, 5)
-CloseBtn.BackgroundColor3 = Colors.Surface
-CloseBtn.Text = "✕"
-CloseBtn.TextColor3 = Colors.Text
+CloseBtn.BackgroundColor3 = UI.Surface
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = UI.Text
 CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
 
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
 
@@ -119,72 +126,49 @@ CloseBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
 end)
 
--- Create Toggle Function
-local function CreateToggle(name, yPos, setting, callback)
+-- Toggle helper
+local function CreateToggle(name, yPos, settingRef, settingName, callback)
     local frame = Instance.new("Frame", MainFrame)
     frame.Size = UDim2.new(1, -20, 0, 35)
     frame.Position = UDim2.new(0, 10, 0, 50 + yPos)
-    frame.BackgroundColor3 = Colors.Surface
+    frame.BackgroundColor3 = UI.Surface
     frame.BorderSizePixel = 0
-    
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
-    
+
     local label = Instance.new("TextLabel", frame)
     label.Size = UDim2.new(0.7, 0, 1, 0)
     label.Position = UDim2.new(0, 10, 0, 0)
     label.Text = name
-    label.TextColor3 = Colors.Text
+    label.TextColor3 = UI.Text
     label.TextSize = 14
     label.Font = Enum.Font.Gotham
     label.BackgroundTransparency = 1
     label.TextXAlignment = Enum.TextXAlignment.Left
-    
+
     local indicator = Instance.new("Frame", frame)
     indicator.Size = UDim2.new(0, 12, 0, 12)
     indicator.Position = UDim2.new(1, -25, 0.5, -6)
-    indicator.BackgroundColor3 = setting and Colors.Accent or Colors.TextDim
+    indicator.BackgroundColor3 = settingRef[settingName] and UI.Accent or UI.TextDim
     indicator.BorderSizePixel = 0
-    
     Instance.new("UICorner", indicator).CornerRadius = UDim.new(1, 0)
-    
+
     frame.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            setting = not setting
-            indicator.BackgroundColor3 = setting and Colors.Accent or Colors.TextDim
-            callback(setting)
+            settingRef[settingName] = not settingRef[settingName]
+            indicator.BackgroundColor3 = settingRef[settingName] and UI.Accent or UI.TextDim
+            if callback then callback(settingRef[settingName]) end
         end
     end)
-    
-    return frame
 end
 
--- Create Toggles
-CreateToggle("ESP Enabled", 0, CatSettings.ESP.Enabled, function(v)
-    CatSettings.ESP.Enabled = v
-end)
-
-CreateToggle("Box ESP", 40, CatSettings.ESP.Boxes, function(v)
-    CatSettings.ESP.Boxes = v
-end)
-
-CreateToggle("Name ESP", 80, CatSettings.ESP.Names, function(v)
-    CatSettings.ESP.Names = v
-end)
-
-CreateToggle("Chams", 120, CatSettings.ESP.Chams, function(v)
-    CatSettings.ESP.Chams = v
-end)
-
-CreateToggle("Gun ESP", 160, CatSettings.MM2.GunESP, function(v)
-    CatSettings.MM2.GunESP = v
-end)
-
-CreateToggle("Auto Shoot Murderer", 200, CatSettings.Aimbot.AutoShoot, function(v)
-    CatSettings.Aimbot.AutoShoot = v
-end)
-
-CreateToggle("Noclip (N)", 240, CatSettings.MM2.Noclip, function(v)
-    CatSettings.MM2.Noclip = v
+CreateToggle("ESP Enabled", 0, CatSettings.ESP, "Enabled")
+CreateToggle("Box ESP", 40, CatSettings.ESP, "Boxes")
+CreateToggle("Name ESP", 80, CatSettings.ESP, "Names")
+CreateToggle("Chams", 120, CatSettings.ESP, "Chams")
+CreateToggle("Gun ESP", 160, CatSettings.MM2, "GunESP")
+CreateToggle("Auto Shoot", 200, CatSettings.Aimbot, "AutoShoot")
+CreateToggle("Noclip (N)", 240, CatSettings.MM2, "Noclip", function(v)
+    if v then EnableNoclip() else DisableNoclip() end
 end)
 
 -- ESP System
@@ -193,73 +177,62 @@ local ChamsObjects = {}
 
 local function CreateESP(player)
     if player == LocalPlayer then return end
-    
-    local objects = {
+    local objs = {
         Box = Drawing.new("Square"),
         Name = Drawing.new("Text"),
         Role = Drawing.new("Text")
     }
-    
-    objects.Box.Visible = false
-    objects.Box.Thickness = 2
-    objects.Box.Filled = false
-    
-    objects.Name.Visible = false
-    objects.Name.Size = 14
-    objects.Name.Center = true
-    objects.Name.Font = 2
-    
-    objects.Role.Visible = false
-    objects.Role.Size = 13
-    objects.Role.Center = true
-    objects.Role.Font = 2
-    
-    ESPObjects[player] = objects
+    objs.Box.Visible = false
+    objs.Box.Thickness = 2
+    objs.Box.Filled = false
+    objs.Name.Visible = false
+    objs.Name.Size = 14
+    objs.Name.Center = true
+    objs.Name.Font = 2
+    objs.Role.Visible = false
+    objs.Role.Size = 13
+    objs.Role.Center = true
+    objs.Role.Font = 2
+    ESPObjects[player] = objs
 end
 
--- Chams System
+-- Chams
 local function CreateChams(player)
-    if player == LocalPlayer then return end
-    if ChamsObjects[player] then return end
-    
-    local highlight = Instance.new("Highlight")
-    highlight.FillTransparency = 0.5
-    highlight.OutlineTransparency = 0
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent = ScreenGui
-    
-    ChamsObjects[player] = highlight
-    
+    if player == LocalPlayer or ChamsObjects[player] then return end
+    local hl = Instance.new("Highlight")
+    hl.FillTransparency = 0.5
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = ScreenGui
+    ChamsObjects[player] = hl
     local function update()
         if player.Character then
-            highlight.Adornee = player.Character
-            local role = GetPlayerRole(player)
-            highlight.FillColor = RoleColors[role]
-            highlight.OutlineColor = Color3.new(1, 1, 1)
+            hl.Adornee = player.Character
+            hl.FillColor = RoleColors[GetPlayerRole(player)]
+            hl.OutlineColor = Color3.new(1, 1, 1)
         end
     end
-    
     update()
     player.CharacterAdded:Connect(update)
 end
 
--- Gun ESP
+-- Gun ESP (throttled)
 local GunESPObjects = {}
+local GunESPThrottle = 0
 
 local function UpdateGunESP()
-    -- Clear old
+    local now = tick()
+    if now - GunESPThrottle < 1 then return end
+    GunESPThrottle = now
     for _, obj in pairs(GunESPObjects) do
         if obj.Remove then obj:Remove() end
     end
     GunESPObjects = {}
-    
     if not CatSettings.MM2.GunESP then return end
-    
-    -- Find guns
     for _, obj in ipairs(workspace:GetChildren()) do
         if obj.Name == "GunDrop" and obj:FindFirstChild("Handle") then
             local text = Drawing.new("Text")
-            text.Text = "🔫 GUN"
+            text.Text = "[GUN]"
             text.Size = 16
             text.Color = Color3.fromRGB(255, 215, 0)
             text.Center = true
@@ -269,7 +242,7 @@ local function UpdateGunESP()
     end
 end
 
--- Auto Aim
+-- Aimbot
 local lastShot = 0
 
 local function GetMurderer()
@@ -281,161 +254,168 @@ local function GetMurderer()
     return nil
 end
 
-local function Shoot()
+local function EquipGun()
     local char = LocalPlayer.Character
-    if not char then return end
-    
+    if not char then return false end
     local gun = char:FindFirstChild("Gun")
-    if not gun then return end
-    
+    if gun then return true end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        gun = bp:FindFirstChild("Gun")
+        if gun then
+            local hum = char:FindFirstChild("Humanoid")
+            if hum then hum:EquipTool(gun); return true end
+        end
+    end
+    return false
+end
+
+local function ShootAtMurderer()
     local murderer = GetMurderer()
-    if not murderer or not murderer.Character then return end
-    
+    if not murderer or not murderer.Character then return false end
     local target = murderer.Character:FindFirstChild("Head") or murderer.Character:FindFirstChild("HumanoidRootPart")
-    if not target then return end
-    
-    -- Shoot
-    local args = {
-        target.Position,
-        target
-    }
-    
+    if not target then return false end
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local gun = char:FindFirstChild("Gun")
+    if not gun then return false end
     pcall(function()
         if gun:FindFirstChild("Shoot") then
-            gun.Shoot:FireServer(unpack(args))
+            gun.Shoot:FireServer(target.Position, target)
         elseif gun:FindFirstChild("Fire") then
-            gun.Fire:FireServer(unpack(args))
+            gun.Fire:FireServer(target.Position, target)
         else
-            -- Try remote event
             local remote = gun:FindFirstChildOfClass("RemoteEvent")
-            if remote then
-                remote:FireServer(unpack(args))
+            if remote then remote:FireServer(target.Position, target) end
+        end
+    end)
+    return true
+end
+
+local function AutoAim()
+    if not EquipGun() then return end
+    ShootAtMurderer()
+end
+
+-- Noclip
+local NoclipConnection = nil
+
+local function EnableNoclip()
+    if NoclipConnection then NoclipConnection:Disconnect() end
+    NoclipConnection = RunService.Stepped:Connect(function()
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
             end
         end
     end)
 end
 
--- Noclip
-local Noclip = false
-local NoclipConnection = nil
+local function DisableNoclip()
+    if NoclipConnection then NoclipConnection:Disconnect(); NoclipConnection = nil end
+end
 
 local function ToggleNoclip()
-    Noclip = not Noclip
-    
-    if NoclipConnection then
-        NoclipConnection:Disconnect()
-    end
-    
-    if Noclip then
-        NoclipConnection = RunService.Stepped:Connect(function()
-            local char = LocalPlayer.Character
-            if char then
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = false
-                    end
-                end
-            end
-        end)
+    if CatSettings.MM2.Noclip then
+        CatSettings.MM2.Noclip = false
+        DisableNoclip()
+    else
+        CatSettings.MM2.Noclip = true
+        EnableNoclip()
     end
 end
 
 -- Keybinds
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    
+UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
     if input.KeyCode == Enum.KeyCode.X then
         MainFrame.Visible = not MainFrame.Visible
-    end
-    
-    if input.KeyCode == Enum.KeyCode.N then
+    elseif input.KeyCode == Enum.KeyCode.N then
         ToggleNoclip()
+    end
+    local key = CatSettings.Aimbot.AimbotKey
+    local keyCode = Enum.KeyCode[key]
+    if keyCode and input.KeyCode == keyCode then
+        AutoAim()
     end
 end)
 
 -- Main Loop
 RunService.RenderStepped:Connect(function()
-    -- Update ESP
+    -- ESP
     if CatSettings.ESP.Enabled then
-        for player, objects in pairs(ESPObjects) do
+        for player, objs in pairs(ESPObjects) do
             if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                 local hrp = player.Character.HumanoidRootPart
                 local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-                
+                local role = GetPlayerRole(player)
+                local color = RoleColors[role]
+
                 if onScreen then
-                    local role = GetPlayerRole(player)
-                    local color = RoleColors[role]
-                    
                     if CatSettings.ESP.Boxes then
-                        objects.Box.Visible = true
-                        objects.Box.Position = Vector2.new(pos.X - 25, pos.Y - 35)
-                        objects.Box.Size = Vector2.new(50, 70)
-                        objects.Box.Color = color
+                        objs.Box.Visible = true
+                        objs.Box.Position = Vector2.new(pos.X - 25, pos.Y - 35)
+                        objs.Box.Size = Vector2.new(50, 70)
+                        objs.Box.Color = color
                     else
-                        objects.Box.Visible = false
+                        objs.Box.Visible = false
                     end
-                    
                     if CatSettings.ESP.Names then
-                        objects.Name.Visible = true
-                        objects.Name.Position = Vector2.new(pos.X, pos.Y - 45)
-                        objects.Name.Text = player.Name
-                        objects.Name.Color = color
+                        objs.Name.Visible = true
+                        objs.Name.Position = Vector2.new(pos.X, pos.Y - 45)
+                        objs.Name.Text = player.Name
+                        objs.Name.Color = color
                     else
-                        objects.Name.Visible = false
+                        objs.Name.Visible = false
                     end
-                    
-                    objects.Role.Visible = CatSettings.ESP.Roles
                     if CatSettings.ESP.Roles then
-                        objects.Role.Position = Vector2.new(pos.X, pos.Y + 35)
-                        objects.Role.Text = role
-                        objects.Role.Color = color
+                        objs.Role.Visible = true
+                        objs.Role.Position = Vector2.new(pos.X, pos.Y + 35)
+                        objs.Role.Text = role
+                        objs.Role.Color = color
+                    else
+                        objs.Role.Visible = false
                     end
                 else
-                    objects.Box.Visible = false
-                    objects.Name.Visible = false
-                    objects.Role.Visible = false
+                    objs.Box.Visible = false
+                    objs.Name.Visible = false
+                    objs.Role.Visible = false
                 end
             else
-                objects.Box.Visible = false
-                objects.Name.Visible = false
-                objects.Role.Visible = false
+                objs.Box.Visible = false
+                objs.Name.Visible = false
+                objs.Role.Visible = false
             end
         end
     else
-        -- Hide all ESP
-        for _, objects in pairs(ESPObjects) do
-            objects.Box.Visible = false
-            objects.Name.Visible = false
-            objects.Role.Visible = false
+        for _, objs in pairs(ESPObjects) do
+            objs.Box.Visible = false
+            objs.Name.Visible = false
+            objs.Role.Visible = false
         end
     end
-    
-    -- Update Chams
+
+    -- Chams
     if CatSettings.ESP.Chams then
         for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then
-                if not ChamsObjects[player] then
-                    CreateChams(player)
-                end
+            if player ~= LocalPlayer and not ChamsObjects[player] then
+                CreateChams(player)
             end
         end
-    else
-        for _, highlight in pairs(ChamsObjects) do
-            highlight.Enabled = false
-        end
     end
-    
-    -- Update Chams Colors
-    for player, highlight in pairs(ChamsObjects) do
+    for player, hl in pairs(ChamsObjects) do
         if player and player.Character then
-            local role = GetPlayerRole(player)
-            if highlight.FillColor ~= RoleColors[role] then
-                highlight.FillColor = RoleColors[role]
+            if CatSettings.ESP.Chams then
+                hl.Enabled = true
+                hl.Adornee = player.Character
+                hl.FillColor = RoleColors[GetPlayerRole(player)]
+            else
+                hl.Enabled = false
             end
-            highlight.Enabled = CatSettings.ESP.Chams
         end
     end
-    
+
     -- Gun ESP
     if CatSettings.MM2.GunESP then
         UpdateGunESP()
@@ -457,44 +437,35 @@ RunService.RenderStepped:Connect(function()
             text.Visible = false
         end
     end
-    
+
     -- Auto Shoot
     if CatSettings.Aimbot.AutoShoot then
         local now = tick()
         if now - lastShot > 0.5 then
             lastShot = now
-            Shoot()
+            AutoAim()
         end
     end
 end)
 
--- Create ESP for existing players
+-- Player tracking
 for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        CreateESP(player)
-    end
+    if player ~= LocalPlayer then CreateESP(player) end
 end
-
--- Create ESP for new players
-Players.PlayerAdded:Connect(function(player)
-    CreateESP(player)
-end)
-
--- Cleanup when players leave
+Players.PlayerAdded:Connect(function(player) CreateESP(player) end)
 Players.PlayerRemoving:Connect(function(player)
     if ESPObjects[player] then
-        for _, obj in pairs(ESPObjects[player]) do
-            obj:Remove()
-        end
+        for _, objs in pairs(ESPObjects[player]) do objs:Remove() end
         ESPObjects[player] = nil
     end
     if ChamsObjects[player] then
         ChamsObjects[player]:Destroy()
         ChamsObjects[player] = nil
     end
+    RoleCache[player] = nil
 end)
 
-print("✅ MM2 Hub Loaded!")
-print("Press X = Open/Close GUI")
-print("Press N = Toggle Noclip")
-print("Click 🐱 button to open GUI")
+print("MM2 Hub Loaded!")
+print("Press X = GUI")
+print("Press N = Noclip")
+print("Press " .. CatSettings.Aimbot.AimbotKey .. " = Auto Aim")
