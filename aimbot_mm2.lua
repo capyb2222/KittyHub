@@ -89,7 +89,7 @@ Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 
 local Title = Instance.new("TextLabel", MainFrame)
 Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "KAT MM2 Hub"
+Title.Text = "Kitty Hub"
 Title.TextColor3 = UI.Accent
 Title.TextSize = 20
 Title.Font = Enum.Font.GothamBold
@@ -99,7 +99,7 @@ local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
 ToggleBtn.Position = UDim2.new(0.02, 0, 0.5, -25)
 ToggleBtn.BackgroundColor3 = UI.Accent
-ToggleBtn.Text = "KAT"
+ToggleBtn.Text = "Kitty"
 ToggleBtn.TextSize = 18
 ToggleBtn.Font = Enum.Font.GothamBold
 ToggleBtn.TextColor3 = UI.Text
@@ -233,6 +233,7 @@ local function UpdateGunESP()
         if obj.Name == "GunDrop" and obj:FindFirstChild("Handle") then
             local text = Drawing.new("Text")
             text.Text = "[GUN]"
+
             text.Size = 16
             text.Color = Color3.fromRGB(255, 215, 0)
             text.Center = true
@@ -465,7 +466,7 @@ Players.PlayerRemoving:Connect(function(player)
     RoleCache[player] = nil
 end)
 
-print("MM2 Hub Loaded!")
+print("Kitty Hub Loaded!")
 print("Press X = GUI")
 print("Press N = Noclip")
 print("Press " .. CatSettings.Aimbot.AimbotKey .. " = Auto Aim")
