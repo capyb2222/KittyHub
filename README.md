@@ -21,7 +21,7 @@ A Murder Mystery 2 script with ESP (boxes, names, roles, chams), gun ESP, auto a
 
 ## How to Use
 
-1. Download `aimbot_mm2.lua`.
+1. Download `kittyhub.lua`.
 2. Host it on a pastebin or local server.
 3. Execute with your Roblox executor's loadstring.
 
