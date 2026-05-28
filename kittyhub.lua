@@ -17,7 +17,14 @@ getgenv().CatSettings = {
     },
     Aimbot = {
         AutoShoot = true,
-        AimbotKey = "C"
+        AimbotKey = "C",
+        Prediction = true,
+        LeadTime = 0.15,
+        AimPart = "Head",
+        OffScreen = true,
+        FOVCircle = true,
+        FOVRadius = 200,
+        FOVColor = "#C864FF"
     },
     MM2 = {
         GunESP = true,
@@ -28,6 +35,7 @@ getgenv().CatSettings = {
 
 -- Role Detection
 local RoleCache = {}
+local RemoteCache = {}
 
 local RoleColors = {
     Murderer = Color3.fromRGB(255, 50, 50),
@@ -78,8 +86,8 @@ local UI = {
 }
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 500, 0, 350)
-MainFrame.Position = UDim2.new(0.5, -250, 0.5, -175)
+MainFrame.Size = UDim2.new(0, 500, 0, 440)
+MainFrame.Position = UDim2.new(0.5, -250, 0.5, -220)
 MainFrame.BackgroundColor3 = UI.Background
 MainFrame.BorderSizePixel = 0
 MainFrame.Visible = false
@@ -167,7 +175,10 @@ CreateToggle("Name ESP", 80, CatSettings.ESP, "Names")
 CreateToggle("Chams", 120, CatSettings.ESP, "Chams")
 CreateToggle("Gun ESP", 160, CatSettings.MM2, "GunESP")
 CreateToggle("Auto Shoot", 200, CatSettings.Aimbot, "AutoShoot")
-CreateToggle("Noclip (N)", 240, CatSettings.MM2, "Noclip", function(v)
+CreateToggle("Prediction", 240, CatSettings.Aimbot, "Prediction")
+CreateToggle("FOV Circle", 280, CatSettings.Aimbot, "FOVCircle")
+CreateToggle("Off-Screen Aim", 320, CatSettings.Aimbot, "OffScreen")
+CreateToggle("Noclip (N)", 360, CatSettings.MM2, "Noclip", function(v)
     if v then EnableNoclip() else DisableNoclip() end
 end)
 
@@ -245,6 +256,30 @@ end
 
 -- Aimbot
 local lastShot = 0
+local aimbotActive = false
+local FOVCircle
+
+local function InitFOVCircle()
+    if FOVCircle then return end
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Visible = false
+    FOVCircle.Thickness = 1.5
+    FOVCircle.Filled = false
+    FOVCircle.NumSides = 64
+    FOVCircle.Transparency = 0.7
+end
+
+local function UpdateFOVCircle()
+    if not CatSettings.Aimbot.FOVCircle or not CatSettings.Aimbot.AutoShoot then
+        if FOVCircle then FOVCircle.Visible = false end
+        return
+    end
+    InitFOVCircle()
+    FOVCircle.Position = UserInputService:GetMouseLocation()
+    FOVCircle.Radius = CatSettings.Aimbot.FOVRadius
+    FOVCircle.Color = aimbotActive and Color3.fromRGB(100, 200, 255) or Color3.fromRGB(200, 100, 255)
+    FOVCircle.Visible = true
+end
 
 local function GetMurderer()
     for _, player in ipairs(Players:GetPlayers()) do
@@ -255,47 +290,145 @@ local function GetMurderer()
     return nil
 end
 
-local function EquipGun()
+local function FindGunRemote(gun)
+    local cached = RemoteCache[gun]
+    if cached then return cached end
+
+    local remote = gun:FindFirstChild("Shoot") or gun:FindFirstChild("Fire")
+    if not remote then
+        remote = gun:FindFirstChildOfClass("RemoteEvent")
+    end
+    if not remote then
+        for _, child in ipairs(gun:GetDescendants()) do
+            if child:IsA("RemoteEvent") then
+                remote = child
+                break
+            end
+        end
+    end
+
+    RemoteCache[gun] = remote
+    return remote
+end
+
+local function InvalidateRemoteCache(gun)
+    RemoteCache[gun] = nil
+end
+
+local function GetAimPart(character)
+    if not character then return nil end
+    local partName = CatSettings.Aimbot.AimPart
+    local part = character:FindFirstChild(partName)
+    if part then return part end
+    return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
+end
+
+local function PredictPosition(part)
+    if not CatSettings.Aimbot.Prediction then return part.Position end
+    local hrp = part.Parent and part.Parent:FindFirstChild("HumanoidRootPart")
+    if hrp and typeof(hrp.Velocity) == "Vector3" and hrp.Velocity.Magnitude > 0.5 then
+        return part.Position + (hrp.Velocity * CatSettings.Aimbot.LeadTime)
+    end
+    return part.Position
+end
+
+local function FindGun()
     local char = LocalPlayer.Character
-    if not char then return false end
+    if not char then return nil end
+
     local gun = char:FindFirstChild("Gun")
-    if gun then return true end
+    if gun then return gun end
+
     local bp = LocalPlayer:FindFirstChild("Backpack")
     if bp then
         gun = bp:FindFirstChild("Gun")
-        if gun then
-            local hum = char:FindFirstChild("Humanoid")
-            if hum then hum:EquipTool(gun); return true end
+        return gun
+    end
+
+    return nil
+end
+
+local function EquipGun()
+    local gun = FindGun()
+    if not gun then return nil end
+
+    local char = LocalPlayer.Character
+    if not char then return nil end
+
+    local inHand = char:FindFirstChild("Gun")
+    if inHand then return inHand end
+
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        pcall(function()
+            hum:EquipTool(gun)
+        end)
+        task.wait()
+        return char:FindFirstChild("Gun") or gun
+    end
+
+    return gun
+end
+
+local function ShootMurderer(murderer)
+    if not murderer or not murderer.Character then return false end
+
+    local part = GetAimPart(murderer.Character)
+    if not part then return false end
+
+    local gun = EquipGun()
+    if not gun then return false end
+
+    local targetPos = PredictPosition(part)
+    local remote = FindGunRemote(gun)
+
+    if not remote then
+        local char = LocalPlayer.Character
+        if char then
+            gun = char:FindFirstChild("Gun")
+            if gun then
+                InvalidateRemoteCache(gun)
+                remote = FindGunRemote(gun)
+            end
         end
     end
-    return false
-end
 
-local function ShootAtMurderer()
-    local murderer = GetMurderer()
-    if not murderer or not murderer.Character then return false end
-    local target = murderer.Character:FindFirstChild("Head") or murderer.Character:FindFirstChild("HumanoidRootPart")
-    if not target then return false end
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local gun = char:FindFirstChild("Gun")
-    if not gun then return false end
-    pcall(function()
-        if gun:FindFirstChild("Shoot") then
-            gun.Shoot:FireServer(target.Position, target)
-        elseif gun:FindFirstChild("Fire") then
-            gun.Fire:FireServer(target.Position, target)
-        else
-            local remote = gun:FindFirstChildOfClass("RemoteEvent")
-            if remote then remote:FireServer(target.Position, target) end
+    if remote then
+        pcall(function()
+            remote:FireServer(targetPos, part)
+        end)
+        return true
+    end
+
+    -- Fallback: try common patterns directly
+    local success = pcall(function()
+        if gun.Shoot then
+            gun.Shoot:FireServer(targetPos, part)
+        elseif gun.Fire then
+            gun.Fire:FireServer(targetPos, part)
         end
     end)
-    return true
+    return success
 end
 
-local function AutoAim()
-    if not EquipGun() then return end
-    ShootAtMurderer()
+local function ExecuteAimbot()
+    local murderer = GetMurderer()
+    if not murderer then return end
+
+    if not CatSettings.Aimbot.OffScreen then
+        local part = GetAimPart(murderer.Character)
+        if part then
+            local onScreen = Camera:WorldToViewportPoint(part.Position)
+            if not onScreen[3] then return end
+        end
+    end
+
+    aimbotActive = true
+    ShootMurderer(murderer)
+end
+
+local function StopAimbot()
+    aimbotActive = false
 end
 
 -- Noclip
@@ -338,7 +471,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
     local key = CatSettings.Aimbot.AimbotKey
     local keyCode = Enum.KeyCode[key]
     if keyCode and input.KeyCode == keyCode then
-        AutoAim()
+        ExecuteAimbot()
     end
 end)
 
@@ -442,11 +575,16 @@ RunService.RenderStepped:Connect(function()
     -- Auto Shoot
     if CatSettings.Aimbot.AutoShoot then
         local now = tick()
-        if now - lastShot > 0.5 then
+        if now - lastShot > 0.35 then
             lastShot = now
-            AutoAim()
+            ExecuteAimbot()
         end
+    else
+        StopAimbot()
     end
+
+    -- FOV Circle
+    UpdateFOVCircle()
 end)
 
 -- Player tracking
@@ -466,7 +604,6 @@ Players.PlayerRemoving:Connect(function(player)
     RoleCache[player] = nil
 end)
 
-print("Kitty Hub Loaded!")
-print("Press X = GUI")
-print("Press N = Noclip")
-print("Press " .. CatSettings.Aimbot.AimbotKey .. " = Auto Aim")
+print("Kitty Hub v2 Loaded!")
+print("[X] = GUI | [N] = Noclip | [" .. CatSettings.Aimbot.AimbotKey .. "] = Auto Aim")
+print("Features: AutoShoot | Prediction | FOV Circle | OffScreen Aim | Smart Remote")
