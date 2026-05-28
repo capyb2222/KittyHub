@@ -22,8 +22,10 @@ A Murder Mystery 2 script with ESP (boxes, names, roles, chams), gun ESP, auto a
 ## How to Use
 
 1. Download `kittyhub.lua`.
-2. Host it on a pastebin or local server.
-3. Execute with your Roblox executor's loadstring.
+2. Serve it locally:
+   - **[Python 3](https://www.python.org/downloads/):** `python -m http.server 8000`
+   - **[Node.js](https://nodejs.org/):** `npx http-server`
+3. Use the URL `http://localhost:8000/kittyhub.lua` with your Roblox executor's `loadstring`.
 
 ## Configuration
 
