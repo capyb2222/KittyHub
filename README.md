@@ -1,6 +1,6 @@
 # Kitty Hub
 
-A Murder Mystery 2 script with ESP (boxes, names, roles, chams), gun ESP, auto aim, auto shoot, and noclip.
+A Murder Mystery 2 script with ESP (boxes, names, roles, chams), gun ESP, auto aim, auto shoot, noclip, and movment hacks.
 
 ## Features
 
@@ -10,8 +10,10 @@ A Murder Mystery 2 script with ESP (boxes, names, roles, chams), gun ESP, auto a
 - **Auto Aim** — Press `C` (configurable) to equip your gun, find the murderer, and shoot (works off-screen)
 - **Auto Shoot** — Automatically fires at the murderer every 0.5s (toggleable)
 - **Noclip** — Walk through walls, toggle with `N`
+- **Speed Hacks** — Move faster or slower (can be customizable)
+- **Jump Hacks** — Jump higher or lower (can be customizable)
 
-## Controls
+## Controls (defaults, can be customizable)
 
 | Key | Action |
 |---|---|
