@@ -30,6 +30,12 @@ getgenv().CatSettings = {
         GunESP = true,
         Noclip = false,
         NoclipKey = "N"
+    },
+    Movement = {
+        SpeedEnabled = false,
+        SpeedValue = 16,
+        JumpEnabled = false,
+        JumpValue = 50
     }
 }
 
@@ -169,6 +175,77 @@ local function CreateToggle(name, yPos, settingRef, settingName, callback)
     end)
 end
 
+-- Slider helper
+local function CreateSlider(name, yPos, settingRef, settingName, min, max, default, callback)
+    local frame = Instance.new("Frame", MainFrame)
+    frame.Size = UDim2.new(1, -20, 0, 35)
+    frame.Position = UDim2.new(0, 10, 0, 50 + yPos)
+    frame.BackgroundColor3 = UI.Surface
+    frame.BorderSizePixel = 0
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel", frame)
+    label.Size = UDim2.new(0.5, 0, 1, 0)
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.Text = name
+    label.TextColor3 = UI.Text
+    label.TextSize = 14
+    label.Font = Enum.Font.Gotham
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+
+    local valueLabel = Instance.new("TextLabel", frame)
+    valueLabel.Size = UDim2.new(0.2, 0, 1, 0)
+    valueLabel.Position = UDim2.new(0.7, 0, 0, 0)
+    valueLabel.Text = tostring(settingRef[settingName])
+    valueLabel.TextColor3 = UI.Text
+    valueLabel.TextSize = 14
+    valueLabel.Font = Enum.Font.Gotham
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+    local sliderFrame = Instance.new("Frame", frame)
+    sliderFrame.Size = UDim2.new(0.5, 0, 0.6, 0)
+    sliderFrame.Position = UDim2.new(0.5, 0, 0.2, 0)
+    sliderFrame.BackgroundColor3 = UI.TextDim
+    sliderFrame.BorderSizePixel = 0
+    Instance.new("UICorner", sliderFrame).CornerRadius = UDim.new(0, 3)
+
+    local sliderBar = Instance.new("Frame", sliderFrame)
+    sliderBar.Size = UDim2.new(0, 4, 1, 0)
+    sliderBar.Position = UDim2.new(0, 0, 0, 0)
+    sliderBar.BackgroundColor3 = UI.Accent
+    sliderBar.BorderSizePixel = 0
+    Instance.new("UICorner", sliderBar).CornerRadius = UDim.new(0, 3)
+
+    local function updateSlider()
+        local percent = (settingRef[settingName] - min) / (max - min)
+        sliderBar.Size = UDim2.new(percent, 0, 1, 0)
+        valueLabel.Text = tostring(math.floor(settingRef[settingName]))
+    end
+
+    sliderFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local function moveSlider(input)
+                local pos = input.Position.X - sliderFrame.AbsolutePosition.X
+                local percent = math.clamp(pos / sliderFrame.AbsoluteSize.X, 0, 1)
+                settingRef[settingName] = math.floor(min + (max - min) * percent)
+                updateSlider()
+                if callback then callback(settingRef[settingName]) end
+            end
+            moveSlider(input)
+            local connection
+            connection = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    connection:Disconnect()
+                end
+            end)
+        end
+    end)
+
+    updateSlider()
+end
+
 CreateToggle("ESP Enabled", 0, CatSettings.ESP, "Enabled")
 CreateToggle("Box ESP", 40, CatSettings.ESP, "Boxes")
 CreateToggle("Name ESP", 80, CatSettings.ESP, "Names")
@@ -180,6 +257,20 @@ CreateToggle("FOV Circle", 280, CatSettings.Aimbot, "FOVCircle")
 CreateToggle("Off-Screen Aim", 320, CatSettings.Aimbot, "OffScreen")
 CreateToggle("Noclip (N)", 360, CatSettings.MM2, "Noclip", function(v)
     if v then EnableNoclip() else DisableNoclip() end
+end)
+
+-- Movement Section
+CreateToggle("Speed Hack", 400, CatSettings.Movement, "SpeedEnabled", function(v)
+    ApplyMovementSettings()
+end)
+CreateSlider("Speed Value", 440, CatSettings.Movement, "SpeedValue", 16, 100, 16, function(v)
+    ApplyMovementSettings()
+end)
+CreateToggle("Jump Hack", 480, CatSettings.Movement, "JumpEnabled", function(v)
+    ApplyMovementSettings()
+end)
+CreateSlider("Jump Value", 520, CatSettings.Movement, "JumpValue", 50, 200, 50, function(v)
+    ApplyMovementSettings()
 end)
 
 -- ESP System
@@ -431,6 +522,36 @@ local function StopAimbot()
     aimbotActive = false
 end
 
+-- Movement
+local function ApplyMovementSettings()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChild("Humanoid")
+    if not hum then return end
+    
+    if CatSettings.Movement.SpeedEnabled then
+        hum.WalkSpeed = CatSettings.Movement.SpeedValue
+    else
+        hum.WalkSpeed = 16
+    end
+    
+    if CatSettings.Movement.JumpEnabled then
+        hum.JumpPower = CatSettings.Movement.JumpValue
+    else
+        hum.JumpPower = 50
+    end
+end
+
+local function OnLocalCharacterAdded(char)
+    task.wait(0.5)
+    ApplyMovementSettings()
+end
+
+LocalPlayer.CharacterAdded:Connect(OnLocalCharacterAdded)
+if LocalPlayer.Character then
+    ApplyMovementSettings()
+end
+
 -- Noclip
 local NoclipConnection = nil
 
@@ -606,4 +727,4 @@ end)
 
 print("Kitty Hub v2 Loaded!")
 print("[X] = GUI | [N] = Noclip | [" .. CatSettings.Aimbot.AimbotKey .. "] = Auto Aim")
-print("Features: AutoShoot | Prediction | FOV Circle | OffScreen Aim | Smart Remote")
+print("Features: AutoShoot | Prediction | FOV Circle | OffScreen Aim | Smart Remote | Speed/Jump Hack")
