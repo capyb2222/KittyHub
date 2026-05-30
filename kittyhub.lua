@@ -72,7 +72,7 @@ Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function() OnCharacterAdded(player) end)
 end)
 
--- AetherHub-style GUI
+-- GUI
 local UI = {
     Bg = Color3.fromRGB(25, 25, 35),
     Surface = Color3.fromRGB(35, 35, 45),
@@ -1451,6 +1451,6 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-print("Kitty Hub v3 (AetherHub Style) Loaded!")
+print("Kitty Hub v3 Loaded!")
 print("[X] = GUI | [N] = Noclip | [" .. S.Aimbot.AimbotKey .. "] = Auto Aim")
 print("Features: ESP | Tracers | AutoShoot | Prediction | Rainbow | Crosshair | SpectatorList | AutoCollect")
