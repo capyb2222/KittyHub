@@ -1,39 +1,23 @@
-# Kitty Hub v3
+# Kitty Hub
 
-A Murder Mystery 2 script with a polished AetherHub-style tabbed GUI, full ESP suite, aim assist, and quality-of-life features.
+A universal Roblox script with auto-detecting game support. One loadstring works across games.
 
-## Features
+## How It Works
 
-### ESP Tab
-- **Boxes** — 2D bounding boxes around each player
-- **Names** — Player name labels (with optional distance display)
-- **Roles** — Role text (Murderer, Sheriff, Innocent) below each player
-- **Chams** — Always-on-top highlights colored by role (red / blue / green)
-- **Tracers** — Role-colored lines from screen bottom to each player
-- **Distance** — Appends `[~NN]` to name labels
+`kittyhub.lua` is a thin dispatcher. It checks `game.PlaceId` and loads the right module:
 
-### Aimbot Tab
-- **Auto Shoot** — Automatically fires at the murderer
-- **Prediction** — Leads shots based on target velocity
-- **FOV Circle** — Visual aim radius on screen
-- **Off-Screen Aim** — Aim at murderers even when not on screen
-- **FOV Radius** — Slider (50–400px)
+| Game | PlaceId | Module |
+|---|---|---|
+| Murder Mystery 2 | `142823291` | `mm2.lua` |
+| Anything else | — | `generic.lua` |
 
-### MM2 Tab
-- **Gun ESP** — Highlights dropped `GunDrop` objects with gold text
-- **Noclip** — Walk through walls (toggle with `N`)
-- **Auto Collect** — Teleports to the nearest dropped gun and auto-equips
+## Modules
 
-### Movement Tab
-- **Speed Hack** — Walk speed override (16–100, slider)
-- **Jump Hack** — Jump power override (50–200, slider)
+### mm2.lua — Murder Mystery 2
+Full feature set: ESP (boxes, names, roles, chams, tracers, distance), auto aim & shoot, prediction, FOV circle, gun ESP, auto-collect (teleport), noclip, speed/jump hacks, rainbow mode, crosshair (dot/cross/circle), spectator list.
 
-### Visuals Tab
-- **Rainbow Mode** — Cycles all accent colors through HSV (speed slider 0.5–5)
-- **Crosshair** — Dot, Cross, or Circle style (size/thickness sliders)
-
-### Misc Tab
-- **Spectator List** — Overlay showing which players are watching you
+### generic.lua — Any Game
+Basic features: ESP (boxes, names, chams, tracers, distance), noclip, speed/jump hacks, fly (WASD + Space/Shift).
 
 ## Controls
 
@@ -41,21 +25,25 @@ A Murder Mystery 2 script with a polished AetherHub-style tabbed GUI, full ESP s
 |---|---|
 | `X` | Toggle GUI |
 | `N` | Toggle noclip |
-| `C` | Manual aim & shoot murderer (configurable) |
+| `F` | Toggle fly (generic only) |
+| `C` | Manual aim & shoot murderer (mm2 only) |
 
 ## How to Use
 
-1. Download `kittyhub.lua`.
-2. Serve it locally:
+1. Download all files from the repository or serve them locally.
+2. Start a local server:
    - **Python 3:** `python -m http.server 8000` (or `localhost.py`)
    - **Node.js:** `npx http-server`
-3. Use `loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua"))()` in your executor.
+3. Execute in your executor:
+
+```lua
+loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua"))()
+```
+
+## Compatibility
+
+Works on most executors that support `getgenv()` or `_G`, `Drawing`, and `Instance.new("Highlight")`. If your executor lacks `getgenv()`, the script falls back to `_G` automatically.
 
 ## Persistence
 
-All settings are stored in `getgenv().CatSettings` so they survive script re-runs.
-
-## Credits
-**Me** for putting this all together
-
-**AetherHub** for ideas
+All settings are stored in `getgenv().CatSettings` and survive script re-runs.
