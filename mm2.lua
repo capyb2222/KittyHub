@@ -24,16 +24,16 @@ end
 
 env.CatSettings = env.CatSettings or {
     ESP = {
-        Enabled = true, Boxes = true, Names = true, Roles = true,
-        Chams = true, Tracers = true, Distance = true, MaxDistance = 1000
+        Enabled = false, Boxes = false, Names = false, Roles = false,
+        Chams = false, Tracers = false, Distance = false, MaxDistance = 1000
     },
     Aimbot = {
-        AutoShoot = true, AimbotKey = "C", Prediction = true,
-        LeadTime = 0.15, AimPart = "Head", OffScreen = true,
-        FOVCircle = true, FOVRadius = 200, FOVColor = "#C864FF"
+        AutoShoot = false, AimbotKey = "C", Prediction = false,
+        LeadTime = 0.15, AimPart = "Head", OffScreen = false,
+        FOVCircle = false, FOVRadius = 200, FOVColor = "#C864FF"
     },
     MM2 = {
-        GunESP = true, Noclip = false, NoclipKey = "N", AutoCollect = true
+        GunESP = false, Noclip = false, NoclipKey = "N", AutoCollect = false
     },
     Movement = {
         SpeedEnabled = false, SpeedValue = 16,
@@ -43,10 +43,10 @@ env.CatSettings = env.CatSettings or {
         RainbowMode = false, RainbowSpeed = 1
     },
     Crosshair = {
-        Enabled = true, Style = "Cross", Size = 10, Thickness = 2
+        Enabled = false, Style = "Cross", Size = 10, Thickness = 2
     },
     Misc = {
-        SpectatorList = true
+        SpectatorList = false
     }
 }
 
@@ -61,18 +61,26 @@ local RoleColors = {
     Innocent = Color3.fromRGB(120, 255, 120)
 }
 
+local GunToolNames = {"Gun", "Revolver", "Pistol", "Shotgun", "Rifle"}
+local function HasSheriffGun(container)
+    for _, name in ipairs(GunToolNames) do
+        if container:FindFirstChild(name) then return true end
+    end
+    return false
+end
+
 local function GetPlayerRole(player)
     local cached = RoleCache[player]
     if cached then return cached end
     local char = player.Character
     if char then
         if char:FindFirstChild("Knife") then RoleCache[player] = "Murderer"; return "Murderer" end
-        if char:FindFirstChild("Gun") then RoleCache[player] = "Sheriff"; return "Sheriff" end
+        if HasSheriffGun(char) then RoleCache[player] = "Sheriff"; return "Sheriff" end
     end
     local bp = player:FindFirstChild("Backpack")
     if bp then
         if bp:FindFirstChild("Knife") then RoleCache[player] = "Murderer"; return "Murderer" end
-        if bp:FindFirstChild("Gun") then RoleCache[player] = "Sheriff"; return "Sheriff" end
+        if HasSheriffGun(bp) then RoleCache[player] = "Sheriff"; return "Sheriff" end
     end
     RoleCache[player] = "Innocent"
     return "Innocent"
@@ -134,8 +142,8 @@ local function NewText(color, size, center)
     return t
 end
 
-local winBg = NewRect(UI.Bg, true, 0.2)
-local sidebarBg = NewRect(UI.Surface, true, 0.3)
+local winBg = NewRect(UI.Bg, true, 0)
+local sidebarBg = NewRect(UI.Surface, true, 0)
 local titleTxt = NewText(UI.Accent, 18, false)
 titleTxt.Text = "Kitty Hub"
 local subTxt = NewText(UI.TextDim, 12, false)
@@ -145,7 +153,7 @@ closeTxt.Text = "X"
 local accentLine = NewRect(UI.Accent, true, 0)
 accentLine.Thickness = 0
 
-local toggleBg = NewRect(UI.Accent, true, 0.15)
+local toggleBg = NewRect(UI.Accent, true, 0)
 local toggleTxt = NewText(UI.Text, 14, true)
 toggleTxt.Text = "Kitty"
 
@@ -174,7 +182,7 @@ local function addControl(tabName, ctrl)
 end
 
 local function Toggle(tabName, label, ref, key, callback)
-    local bg = NewRect(Color3.fromRGB(32, 30, 38), true, 0.5)
+    local bg = NewRect(Color3.fromRGB(32, 30, 38), true, 0)
     local lbl = NewText(UI.Text, 13, false)
     lbl.Text = label
     local track = NewRect(Color3.fromRGB(60, 60, 70), true, 0)
@@ -185,12 +193,16 @@ local function Toggle(tabName, label, ref, key, callback)
         parts = {bg, lbl, track, knob},
         draw = function(self, wx, wy)
             local cy = wy + self.contentY
+            bg.Visible = true
             bg.Position = Vector2.new(wx + 4, cy)
             bg.Size = Vector2.new(432, self.h)
+            lbl.Visible = true
             lbl.Position = Vector2.new(wx + 16, cy + 11)
             local tx = wx + 380
+            track.Visible = true
             track.Position = Vector2.new(tx + 5, cy + 9)
             track.Size = Vector2.new(40, 20)
+            knob.Visible = true
             knob.Size = Vector2.new(16, 16)
             if ref[key] then
                 track.Color = UI.Accent
@@ -218,7 +230,7 @@ end
 local function Slider(tabName, label, ref, key, minV, maxV, callback)
     minV = minV or 0
     maxV = maxV or 100
-    local bg = NewRect(Color3.fromRGB(32, 30, 38), true, 0.5)
+    local bg = NewRect(Color3.fromRGB(32, 30, 38), true, 0)
     local lbl = NewText(UI.Text, 13, false)
     lbl.Text = label
     local valTxt = NewText(UI.Accent, 13, false)
@@ -231,14 +243,19 @@ local function Slider(tabName, label, ref, key, minV, maxV, callback)
         parts = {bg, lbl, valTxt, track, fill},
         draw = function(self, wx, wy)
             local cy = wy + self.contentY
+            bg.Visible = true
             bg.Position = Vector2.new(wx + 4, cy)
             bg.Size = Vector2.new(432, self.h)
+            lbl.Visible = true
             lbl.Position = Vector2.new(wx + 16, cy + 6)
+            valTxt.Visible = true
             valTxt.Text = tostring(math.floor(ref[key]))
             valTxt.Position = Vector2.new(wx + 404, cy + 6)
             local pct = math.max(0, math.min((ref[key] - minV) / (maxV - minV), 1))
+            track.Visible = true
             track.Position = Vector2.new(wx + 16, cy + 34)
             track.Size = Vector2.new(408, 4)
+            fill.Visible = true
             fill.Position = Vector2.new(wx + 16, cy + 34)
             fill.Size = Vector2.new(408 * pct, 4)
             fill.Color = UI.Accent
@@ -265,10 +282,10 @@ local function Slider(tabName, label, ref, key, minV, maxV, callback)
 end
 
 local function Cycle(tabName, label, ref, key, options)
-    local bg = NewRect(Color3.fromRGB(32, 30, 38), true, 0.5)
+    local bg = NewRect(Color3.fromRGB(32, 30, 38), true, 0)
     local lbl = NewText(UI.Text, 13, false)
     lbl.Text = label
-    local btnBg = NewRect(UI.Accent, true, 0.2)
+    local btnBg = NewRect(UI.Accent, true, 0)
     local btnTxt = NewText(UI.Text, 12, false)
 
     local idx = 1
@@ -281,12 +298,16 @@ local function Cycle(tabName, label, ref, key, options)
         parts = {bg, lbl, btnBg, btnTxt},
         draw = function(self, wx, wy)
             local cy = wy + self.contentY
+            bg.Visible = true
             bg.Position = Vector2.new(wx + 4, cy)
             bg.Size = Vector2.new(432, self.h)
+            lbl.Visible = true
             lbl.Position = Vector2.new(wx + 16, cy + 11)
+            btnBg.Visible = true
             btnBg.Position = Vector2.new(wx + 356, cy + 6)
             btnBg.Size = Vector2.new(76, 26)
             btnBg.Color = UI.Accent
+            btnTxt.Visible = true
             btnTxt.Text = ref[key]
             btnTxt.Position = Vector2.new(wx + 394, cy + 11)
             btnTxt.Center = true
@@ -346,13 +367,13 @@ Slider("Visuals", "Crosshair Thickness", S.Crosshair, "Thickness", 1, 5)
 
 Toggle("Misc", "Spectator List", S.Misc, "SpectatorList")
 
+local lastTab = ""
 local toggleBtnY = 0
 local function CenterWindow()
     local cam = workspace.CurrentCamera
     if cam and cam.ViewportSize and cam.ViewportSize.X > 0 then
         W.x = math.floor((cam.ViewportSize.X - W.w) / 2)
         W.y = math.floor((cam.ViewportSize.Y - W.h) / 2)
-        toggleBtnY = cam.ViewportSize.Y - 100
         return true
     end
     return false
@@ -362,8 +383,10 @@ task.spawn(function()
 end)
 
 local function RenderGUI()
-    for _, d in ipairs(allDrawings) do
-        d.Visible = false
+    local cam = workspace.CurrentCamera
+    local vs = cam and cam.ViewportSize
+    if vs then
+        toggleBtnY = vs.Y - 100
     end
     if not W.show then
         toggleBg.Visible = true
@@ -371,6 +394,14 @@ local function RenderGUI()
         toggleBg.Size = Vector2.new(50, 50)
         toggleTxt.Visible = true
         toggleTxt.Position = Vector2.new(45, toggleBtnY)
+        if W.show ~= nil then
+            for _, d in ipairs(allDrawings) do
+                if d ~= toggleBg and d ~= toggleTxt then
+                    d.Visible = false
+                end
+            end
+        end
+        lastTab = ""
         return
     end
     local wx, wy = W.x, W.y
@@ -404,6 +435,17 @@ local function RenderGUI()
     end
     local scroll = W.scroll[W.tab] or 0
     local cx, cwy = wx + 175, wy + 45 + scroll
+    if W.tab ~= lastTab then
+        for _, d in ipairs(allDrawings) do
+            d.Visible = false
+        end
+        for _, idx in ipairs(controlsByTab[lastTab]) do
+            for _, part in ipairs(controls[idx].parts) do
+                part.Visible = false
+            end
+        end
+        lastTab = W.tab
+    end
     for _, idx in ipairs(controlsByTab[W.tab]) do
         controls[idx].draw(controls[idx], cx, cwy)
     end
@@ -429,7 +471,9 @@ UserInputService.InputBegan:Connect(function(input, processed)
     if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
     local mx, my = UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y
     if not W.show then
-        if mx >= 20 and mx <= 70 and my >= toggleBtnY - 25 and my <= toggleBtnY + 25 then
+        local cam = workspace.CurrentCamera
+        local tglY = cam and cam.ViewportSize and (cam.ViewportSize.Y - 100) or toggleBtnY
+        if mx >= 20 and mx <= 70 and my >= tglY - 25 and my <= tglY + 25 then
             W.show = true
         end
         return
@@ -491,7 +535,7 @@ end)
 
 -- Spectator List (Drawing-based)
 local specLabels = {}
-local specBg = NewRect(Color3.fromRGB(25, 25, 35), true, 0.3)
+local specBg = NewRect(Color3.fromRGB(25, 25, 35), true, 0)
 local specTitle = NewText(UI.Accent, 11, false)
 specTitle.Text = "Spectators"
 
@@ -531,7 +575,12 @@ local function UpdateSpectatorList()
     specTitle.Position = Vector2.new(bx + 5, by + 2)
     for i, name in ipairs(specs) do
         if not specLabels[name] then
-            local lbl = NewText(UI.Text, 11, false)
+            local lbl = Drawing.new("Text")
+            lbl.Visible = false
+            lbl.Font = 2
+            lbl.Size = 11
+            lbl.Center = false
+            lbl.Color = UI.Text
             specLabels[name] = lbl
         end
         specLabels[name].Visible = true
