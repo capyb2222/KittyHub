@@ -5,8 +5,11 @@ local GAME_MODULES = {
     [142823291] = "mm2"
 }
 
+print("Kitty Hub: Detecting game...")
+
 local function LoadModule(name)
     local url = host .. "/" .. name .. ".lua"
+    print("Kitty Hub: Loading " .. name .. ".lua...")
     local success, result = pcall(function()
         return loadstring(game:HttpGet(url))()
     end)

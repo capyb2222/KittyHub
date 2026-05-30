@@ -8,7 +8,19 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Compatibility layer
 local env = (pcall(getgenv) and getgenv()) or _G
-local GUI_Parent = (pcall(gethui) and gethui()) or game:GetService("CoreGui")
+local GUI_Parent = (pcall(gethui) and gethui()) or (LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")) or game:GetService("CoreGui")
+local hasDrawing = pcall(function() return Drawing.new("Text") end)
+
+if hasDrawing then
+    local dbg = Drawing.new("Text")
+    dbg.Text = "Kitty Hub Generic loaded — Press X"
+    dbg.Size = 18
+    dbg.Position = Vector2.new(10, 10)
+    dbg.Color = Color3.new(0, 1, 0)
+    dbg.Center = false
+    dbg.Visible = true
+    task.delay(5, function() if dbg and dbg.Remove then dbg:Remove() end end)
+end
 
 -- Settings
 env.CatSettings = env.CatSettings or {
