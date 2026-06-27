@@ -29,7 +29,7 @@ Basic features: ESP (boxes, names, chams, tracers, distance), noclip, speed/jump
 3. Execute in your executor:
 
 ```lua
-loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua"))()
+loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua?v="..tostring(tick())))()
 ```
 
 ## Compatibility
