@@ -14,12 +14,13 @@ A roblox script mainly for the game Murder Mystery 2.
 ## Modules
 
 ### mm2.lua — Murder Mystery 2
-Native Roblox UI (no Drawing API). Features:
-- **Aimbot** — locks onto the murderer and fires your sheriff gun (auto-equips it). Hold-key or auto-shoot, with off-screen aim.
-- **ESP** — boxes, names, roles, tracers, chams, distance (color-coded by role).
-- **Gun ESP** — marks dropped guns in **yellow**.
-- **Auto Collect** — teleports you onto the nearest dropped gun.
-- **Noclip** (keybind), **Speed/Jump** hacks.
+Features:
+- **Aimbot**
+- **ESP** 
+- **Gun ESP**
+- **Auto Grab Gun**
+- **Noclip**
+- **Speed/Jump**
 
 Open the menu with the **Kitty** button (bottom-left) or press **X**. Settings persist across re-runs via `getgenv().CatSettings`.
 
