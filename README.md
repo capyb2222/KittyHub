@@ -34,8 +34,8 @@ loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua?v="..tostring(tick()
 
 ## Compatibility
 
-Works on most executors that support `getgenv()` or `_G`, `Drawing`, and `Instance.new("Highlight")`. If your executor lacks `getgenv()`, the script falls back to `_G` automatically.
-Mainly tested on Xeno.
+Works on most executors that supports native Roblox UI.
+Recommend Xeno since I mainly tested there.
 
 ## Persistence
 
