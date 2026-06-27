@@ -46,4 +46,4 @@ Works on most executors that support `getgenv()` or `_G`, `Drawing`, and `Instan
 
 ## Persistence
 
-All settings are stored in `getgenv().CatSettings` and survive script re-runs.
+All settings are stored in `getgenv().CatSettings` and survive script re-runs
