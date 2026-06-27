@@ -17,14 +17,37 @@ if not hasDrawing then
 end
 
 local dbg = Drawing.new("Text")
-dbg.Text = "Kitty Hub MM2 loaded — Press X"
+dbg.Text = "Kitty Hub MM2 v6 loaded — Press X"
 dbg.Size = 18
 dbg.Position = Vector2.new(10, 10)
 dbg.Font = 3
 dbg.Color = Color3.new(0, 1, 0)
 dbg.Center = false
 dbg.Visible = true
-task.delay(5, function() if dbg and dbg.Remove then dbg:Remove() end end)
+task.delay(8, function() if dbg and dbg.Remove then dbg:Remove() end end)
+
+-- On-screen capability readout: which Drawing primitives can this executor
+-- create? mm2's UI now needs only Line + Text (Circle is optional). If the UI
+-- still doesn't appear, this line tells us exactly what's missing.
+local function __canDraw(kind)
+    return (pcall(function()
+        local d = Drawing.new(kind)
+        if d and d.Remove then d:Remove() end
+    end))
+end
+local __probe = Drawing.new("Text")
+__probe.Text = "KH caps  Text:" .. (__canDraw("Text") and "OK" or "X")
+    .. "  Line:" .. (__canDraw("Line") and "OK" or "X")
+    .. "  Tri:" .. (__canDraw("Triangle") and "OK" or "X")
+    .. "  Circle:" .. (__canDraw("Circle") and "OK" or "X")
+    .. "  Square:" .. (__canDraw("Square") and "OK" or "X")
+__probe.Size = 18
+__probe.Position = Vector2.new(10, 32)
+__probe.Font = 3
+__probe.Color = Color3.new(1, 1, 0)
+__probe.Center = false
+__probe.Visible = true
+task.delay(15, function() if __probe and __probe.Remove then __probe:Remove() end end)
 
 env.CatSettings = env.CatSettings or {
     ESP = {
@@ -161,12 +184,18 @@ end
 
 -- Drawing-based GUI
 local UI = {
-    Bg = Color3.fromRGB(25, 25, 35),
-    Surface = Color3.fromRGB(35, 35, 50),
-    Accent = Color3.fromRGB(200, 100, 255),
-    Text = Color3.fromRGB(255, 255, 255),
-    TextDim = Color3.fromRGB(140, 140, 150),
-    Border = Color3.fromRGB(80, 78, 95)
+    Bg = Color3.fromRGB(24, 25, 33),
+    Surface = Color3.fromRGB(31, 33, 45),
+    Card = Color3.fromRGB(38, 40, 55),
+    CardHover = Color3.fromRGB(51, 54, 73),
+    Accent = Color3.fromRGB(124, 152, 255),
+    AccentDim = Color3.fromRGB(74, 96, 178),
+    Text = Color3.fromRGB(238, 240, 248),
+    TextDim = Color3.fromRGB(141, 144, 164),
+    Border = Color3.fromRGB(53, 56, 78),
+    On = Color3.fromRGB(86, 214, 140),
+    OffTrack = Color3.fromRGB(58, 60, 81),
+    OffKnob = Color3.fromRGB(131, 134, 157)
 }
 
 local W = {
@@ -186,40 +215,53 @@ end
 
 local allDrawings = {}
 
-local function NewFill(color, transparency)
-    local t1 = Drawing.new("Triangle")
-    t1.Visible = false
-    t1.Filled = true
-    t1.Thickness = 1
-    t1.Color = color or Color3.new(1, 1, 1)
-    t1.Transparency = transparency or 0
-    local t2 = Drawing.new("Triangle")
-    t2.Visible = false
-    t2.Filled = true
-    t2.Thickness = 1
-    t2.Color = color or Color3.new(1, 1, 1)
-    t2.Transparency = transparency or 0
-    table.insert(allDrawings, t1)
-    table.insert(allDrawings, t2)
+-- Rectangle fill built from stacked, slightly-overlapping horizontal Lines.
+-- This avoids Drawing "Triangle"/"Square" (unsupported on some executors) and
+-- the small strips + overlap keep the fill SOLID even if the executor caps
+-- line thickness. ZIndex keeps backgrounds beneath text/elements.
+local FILL_STRIP_H = 6
+local function NewFill(color, transparency, zindex)
     local fill = {
-        _t1 = t1, _t2 = t2,
         _color = color or Color3.new(1, 1, 1),
         _transparency = transparency or 0,
+        _zindex = zindex or 1,
+        _lines = {},
         _visible = true
     }
+    function fill:_line(i)
+        while #self._lines < i do
+            -- Guard creation: if the executor hits a Drawing-object cap this
+            -- returns nil instead of throwing, so the UI degrades gracefully.
+            local ok, l = pcall(Drawing.new, "Line")
+            if not ok or not l then break end
+            l.Visible = false
+            l.Thickness = 1
+            l.Color = self._color
+            l.Transparency = self._transparency
+            l.ZIndex = self._zindex
+            table.insert(allDrawings, l)
+            table.insert(self._lines, l)
+        end
+        return self._lines[i]
+    end
     function fill:set(x, y, w, h)
-        self._t1.Visible = self._visible
-        self._t1.Color = self._color
-        self._t1.Transparency = self._transparency
-        self._t1.PointA = Vector2.new(x, y)
-        self._t1.PointB = Vector2.new(x + w, y)
-        self._t1.PointC = Vector2.new(x, y + h)
-        self._t2.Visible = self._visible
-        self._t2.Color = self._color
-        self._t2.Transparency = self._transparency
-        self._t2.PointA = Vector2.new(x + w, y)
-        self._t2.PointB = Vector2.new(x, y + h)
-        self._t2.PointC = Vector2.new(x + w, y + h)
+        local count = math.max(1, math.ceil(h / FILL_STRIP_H))
+        for i = 1, count do
+            local l = self:_line(i)
+            if not l then break end
+            local sy = y + (i - 1) * FILL_STRIP_H
+            local sh = math.min(h - (i - 1) * FILL_STRIP_H, FILL_STRIP_H)
+            l.Visible = self._visible
+            l.Color = self._color
+            l.Transparency = self._transparency
+            l.ZIndex = self._zindex
+            l.From = Vector2.new(x, sy + sh / 2)
+            l.To = Vector2.new(x + w, sy + sh / 2)
+            l.Thickness = sh + 3 -- overlap neighbours so there are no gaps
+        end
+        for i = count + 1, #self._lines do
+            self._lines[i].Visible = false
+        end
     end
     return setmetatable(fill, {
         __index = function(t, k)
@@ -231,21 +273,21 @@ local function NewFill(color, transparency)
         __newindex = function(t, k, v)
             if k == "Visible" then
                 t._visible = v
-                t._t1.Visible = v; t._t2.Visible = v
+                for _, l in ipairs(t._lines) do l.Visible = v end
             elseif k == "Color" then
                 t._color = v
-                t._t1.Color = v; t._t2.Color = v
+                for _, l in ipairs(t._lines) do l.Color = v end
             elseif k == "Transparency" then
                 t._transparency = v
-                t._t1.Transparency = v; t._t2.Transparency = v
+                for _, l in ipairs(t._lines) do l.Transparency = v end
             end
             rawset(t, k, v)
         end
     })
 end
 
--- Line-quad outline (replaces Square for compatibility)
-local function NewOutline(color, transparency)
+-- Line-quad outline (avoids Square for compatibility)
+local function NewOutline(color, transparency, zindex)
     local lines = {}
     for i = 1, 4 do
         local l = Drawing.new("Line")
@@ -253,6 +295,7 @@ local function NewOutline(color, transparency)
         l.Thickness = 2
         l.Color = color or Color3.new(1, 1, 1)
         l.Transparency = transparency or 0
+        l.ZIndex = zindex or 4
         table.insert(allDrawings, l)
         table.insert(lines, l)
     end
@@ -283,37 +326,117 @@ local function NewOutline(color, transparency)
     })
 end
 
-local function NewText(color, size, center)
+local function NewText(color, size, center, zindex)
     local t = Drawing.new("Text")
     t.Visible = false
     t.Font = 3
     t.Size = size or 14
     t.Center = center or false
     t.Color = color or Color3.new(1, 1, 1)
+    t.ZIndex = zindex or 10
     table.insert(allDrawings, t)
     return t
 end
 
+-- Probe Circle support once. Some executors' Drawing API only implements a
+-- subset (Text/Line/Triangle), so creating a Circle would throw and abort the
+-- whole script. When unsupported we fall back to a square shape below.
+local circleOK = pcall(function()
+    local d = Drawing.new("Circle")
+    assert(d, "Circle unsupported")
+    d.Radius = 1
+    d:Remove()
+end)
+
+local function NewCircle(color, filled, transparency, zindex)
+    if circleOK then
+        local ok, c = pcall(Drawing.new, "Circle")
+        if ok and c then
+            c.Visible = false
+            c.Filled = filled ~= false
+            c.NumSides = 32
+            c.Thickness = 1
+            c.Radius = 6
+            c.Color = color or Color3.new(1, 1, 1)
+            c.Transparency = transparency or 0
+            c.ZIndex = zindex or 3
+            table.insert(allDrawings, c)
+            return c
+        end
+    end
+    -- Fallback: a centered square built from the (always-supported) line
+    -- fill, exposing the same Visible/Position/Radius/Color interface so all
+    -- the draw code works unchanged.
+    local fillObj = NewFill(color, transparency, zindex or 3)
+    fillObj.Visible = false
+    local proxy = { _pos = Vector2.new(0, 0), _radius = 6, _vis = false }
+    local function redraw()
+        if not proxy._vis then fillObj.Visible = false; return end
+        local r = proxy._radius
+        fillObj.Visible = true
+        fillObj:set(proxy._pos.X - r, proxy._pos.Y - r, r * 2, r * 2)
+    end
+    return setmetatable(proxy, {
+        __newindex = function(t, k, v)
+            if k == "Visible" then
+                t._vis = v
+                if v then redraw() else fillObj.Visible = false end
+            elseif k == "Position" then
+                t._pos = v; redraw()
+            elseif k == "Radius" then
+                t._radius = v; redraw()
+            elseif k == "Color" then
+                fillObj.Color = v
+            elseif k == "Transparency" then
+                fillObj.Transparency = v
+            else
+                rawset(t, k, v)
+            end
+        end
+    })
+end
+
+local function inRect(px, py, x, y, w, h)
+    return px >= x and px <= x + w and py >= y and py <= y + h
+end
+
+local guiMouse = Vector2.new(0, 0)
+
 local winBg = NewFill(UI.Bg, 0)
+local headerBg = NewFill(UI.Surface, 0)
 local sidebarBg = NewFill(UI.Surface, 0)
 local titleTxt = NewText(UI.Accent, 22, false)
 titleTxt.Text = "Kitty Hub"
-local subTxt = NewText(UI.TextDim, 15, false)
-subTxt.Text = "v3"
-local closeTxt = NewText(UI.Text, 18, false)
+local badgeBg = NewFill(UI.Accent, 0)
+local subTxt = NewText(UI.Text, 12, true)
+subTxt.Text = "MM2"
+local closeTxt = NewText(UI.TextDim, 18, true)
 closeTxt.Text = "X"
-local accentLine = Drawing.new("Line")
-accentLine.Visible = false
-accentLine.Thickness = 3
-accentLine.Color = UI.Accent
-accentLine.Transparency = 0
-table.insert(allDrawings, accentLine)
+local headerLine = Drawing.new("Line")
+headerLine.Visible = false
+headerLine.Thickness = 2
+headerLine.Color = UI.Accent
+headerLine.Transparency = 0
+headerLine.ZIndex = 4
+table.insert(allDrawings, headerLine)
+local dividerLine = Drawing.new("Line")
+dividerLine.Visible = false
+dividerLine.Thickness = 1
+dividerLine.Color = UI.Border
+dividerLine.Transparency = 0
+dividerLine.ZIndex = 4
+table.insert(allDrawings, dividerLine)
 
 local winBorder = NewOutline(UI.Border, 0)
+local tabIndicator = NewFill(UI.Accent, 0, 3)
 
-local toggleBg = NewFill(UI.Accent, 0)
-local toggleTxt = NewText(UI.Text, 22, true)
-toggleTxt.Text = "Kitty"
+-- Floating launcher button (circular)
+local toggleRing = NewCircle(UI.Accent, false, 0)
+toggleRing.NumSides = 64
+local toggleCircle = NewCircle(UI.AccentDim, true, 0)
+toggleCircle.NumSides = 64
+local toggleTxt = NewText(UI.Text, 26, true)
+toggleTxt.Text = "K"
 
 local tabBtns = {}
 for i, name in ipairs(W.tabs) do
@@ -340,38 +463,52 @@ local function addControl(tabName, ctrl)
 end
 
 local function Toggle(tabName, label, ref, key, callback)
-    local bg = NewFill(Color3.fromRGB(25, 23, 30), 0)
+    local bg = NewFill(UI.Card, 0)
     local lbl = NewText(UI.Text, 15, false)
     lbl.Text = label
-    local track = NewFill(Color3.fromRGB(40, 40, 50), 0)
-    local knob = NewFill(Color3.fromRGB(80, 80, 90), 0)
+    local trackMid = NewFill(UI.OffTrack, 0)
+    local trackL = NewCircle(UI.OffTrack, true, 0)
+    local trackR = NewCircle(UI.OffTrack, true, 0)
+    local knob = NewCircle(UI.OffKnob, true, 0)
     local stateTxt = NewText(UI.TextDim, 12, true)
 
     local ctrl = {
-        type = "toggle", h = 42, ref = ref, key = key, callback = callback,
-        parts = {bg, lbl, track, knob, stateTxt},
+        type = "toggle", h = 40, ref = ref, key = key, callback = callback,
+        parts = {bg, lbl, trackMid, trackL, trackR, knob, stateTxt},
         draw = function(self, wx, wy)
             local cy = wy + self.contentY
+            local hover = inRect(guiMouse.X, guiMouse.Y, wx + 4, cy, 432, self.h)
             bg:set(wx + 4, cy, 432, self.h)
+            bg.Color = hover and UI.CardHover or UI.Card
             lbl.Visible = true
-            lbl.Position = Vector2.new(wx + 16, cy + 13)
-            local tx = wx + 370
-            track:set(tx + 5, cy + 11, 40, 20)
-            knob.Visible = true
+            lbl.Position = Vector2.new(wx + 16, cy + 12)
+
+            local th, tw = 22, 46
+            local tx = wx + 4 + 432 - 16 - tw
+            local ty = cy + (self.h - th) / 2
+            local midY = ty + th / 2
+            trackMid:set(tx + th / 2, ty, tw - th, th)
+            trackL.Visible = true; trackL.Radius = th / 2; trackL.Position = Vector2.new(tx + th / 2, midY)
+            trackR.Visible = true; trackR.Radius = th / 2; trackR.Position = Vector2.new(tx + tw - th / 2, midY)
+            knob.Visible = true; knob.Radius = th / 2 - 3
             stateTxt.Visible = true
-            stateTxt.Position = Vector2.new(tx - 14, cy + 14)
-            if ref[key] then
-                track.Color = Color3.fromRGB(80, 255, 100)
+            stateTxt.Position = Vector2.new(tx - 22, cy + 13)
+
+            local on = ref[key]
+            local trackColor = on and UI.On or UI.OffTrack
+            trackMid.Color = trackColor
+            trackL.Color = trackColor
+            trackR.Color = trackColor
+            if on then
                 knob.Color = Color3.new(1, 1, 1)
-                knob:set(tx + 5 + 22, cy + 13, 16, 16)
+                knob.Position = Vector2.new(tx + tw - th / 2, midY)
                 stateTxt.Text = "ON"
-                stateTxt.Color = Color3.fromRGB(80, 255, 100)
+                stateTxt.Color = UI.On
             else
-                track.Color = Color3.fromRGB(40, 40, 50)
-                knob.Color = Color3.fromRGB(80, 80, 90)
-                knob:set(tx + 5 + 2, cy + 13, 16, 16)
+                knob.Color = UI.OffKnob
+                knob.Position = Vector2.new(tx + th / 2, midY)
                 stateTxt.Text = "OFF"
-                stateTxt.Color = Color3.fromRGB(80, 80, 90)
+                stateTxt.Color = UI.TextDim
             end
         end,
         hitTest = function(self, mx, my, wx, wy)
@@ -390,34 +527,44 @@ end
 local function Slider(tabName, label, ref, key, minV, maxV, callback)
     minV = minV or 0
     maxV = maxV or 100
-    local bg = NewFill(Color3.fromRGB(25, 23, 30), 0)
+    local bg = NewFill(UI.Card, 0)
     local lbl = NewText(UI.Text, 15, false)
     lbl.Text = label
     local valTxt = NewText(UI.Accent, 15, false)
-    local track = NewFill(Color3.fromRGB(40, 40, 50), 0)
+    local track = NewFill(UI.OffTrack, 0)
     local fill = NewFill(UI.Accent, 0)
+    local thumb = NewCircle(Color3.new(1, 1, 1), true, 0)
 
     local ctrl = {
-        type = "slider", h = 48, minV = minV, maxV = maxV,
+        type = "slider", h = 50, minV = minV, maxV = maxV,
         ref = ref, key = key, callback = callback,
-        parts = {bg, lbl, valTxt, track, fill},
+        parts = {bg, lbl, valTxt, track, fill, thumb},
         draw = function(self, wx, wy)
             local cy = wy + self.contentY
+            local hover = inRect(guiMouse.X, guiMouse.Y, wx + 4, cy, 432, self.h)
             bg:set(wx + 4, cy, 432, self.h)
+            bg.Color = hover and UI.CardHover or UI.Card
             lbl.Visible = true
-            lbl.Position = Vector2.new(wx + 16, cy + 7)
+            lbl.Position = Vector2.new(wx + 16, cy + 8)
             valTxt.Visible = true
-            valTxt.Text = tostring(math.floor(ref[key]))
-            valTxt.Position = Vector2.new(wx + 400, cy + 7)
-            local pct = math.max(0, math.min((ref[key] - minV) / (maxV - minV), 1))
-            track:set(wx + 16, cy + 36, 408, 4)
+            valTxt.Text = tostring(math.floor(ref[key] or 0))
+            valTxt.Color = UI.Accent
+            valTxt.Position = Vector2.new(wx + 398, cy + 8)
+            local pct = math.max(0, math.min(((ref[key] or 0) - minV) / (maxV - minV), 1))
+            local tX, tY, tW = wx + 16, cy + 36, 408
+            track:set(tX, tY, tW, 5)
+            track.Color = UI.OffTrack
             fill.Visible = pct > 0
-            if pct > 0 then fill:set(wx + 16, cy + 36, 408 * pct, 4) end
+            if pct > 0 then fill:set(tX, tY, tW * pct, 5) end
             fill.Color = UI.Accent
+            thumb.Visible = true
+            thumb.Radius = 8
+            thumb.Color = Color3.new(1, 1, 1)
+            thumb.Position = Vector2.new(tX + tW * pct, tY + 2)
         end,
         hitTest = function(self, mx, my, wx, wy)
             local cy = wy + self.contentY
-            return mx >= wx + 16 and mx <= wx + 424 and my >= cy + 32 and my <= cy + 44
+            return mx >= wx + 14 and mx <= wx + 426 and my >= cy + 28 and my <= cy + 48
         end,
         beginDrag = function(self, mx, my, wx, wy)
             local pct = math.max(0, math.min((mx - (wx + 16)) / 408, 1))
@@ -437,11 +584,11 @@ local function Slider(tabName, label, ref, key, minV, maxV, callback)
 end
 
 local function Cycle(tabName, label, ref, key, options)
-    local bg = NewFill(Color3.fromRGB(25, 23, 30), 0)
+    local bg = NewFill(UI.Card, 0)
     local lbl = NewText(UI.Text, 15, false)
     lbl.Text = label
     local btnBg = NewFill(UI.Accent, 0)
-    local btnTxt = NewText(UI.Text, 14, false)
+    local btnTxt = NewText(UI.Text, 14, true)
 
     local idx = 1
     for i, opt in ipairs(options) do
@@ -449,26 +596,29 @@ local function Cycle(tabName, label, ref, key, options)
     end
 
     local ctrl = {
-        type = "cycle", h = 42, options = options, idx = idx, ref = ref, key = key,
+        type = "cycle", h = 40, options = options, idx = idx, ref = ref, key = key,
         parts = {bg, lbl, btnBg, btnTxt},
         draw = function(self, wx, wy)
             local cy = wy + self.contentY
             for i, opt in ipairs(self.options) do
                 if opt == ref[key] then self.idx = i; break end
             end
+            local hover = inRect(guiMouse.X, guiMouse.Y, wx + 4, cy, 432, self.h)
             bg:set(wx + 4, cy, 432, self.h)
+            bg.Color = hover and UI.CardHover or UI.Card
             lbl.Visible = true
-            lbl.Position = Vector2.new(wx + 16, cy + 13)
-            btnBg:set(wx + 356, cy + 8, 76, 26)
-            btnBg.Color = UI.Accent
+            lbl.Position = Vector2.new(wx + 16, cy + 12)
+            local bHover = inRect(guiMouse.X, guiMouse.Y, wx + 352, cy + 7, 80, 26)
+            btnBg:set(wx + 352, cy + 7, 80, 26)
+            btnBg.Color = bHover and UI.Accent or UI.AccentDim
             btnTxt.Visible = true
-            btnTxt.Text = ref[key]
-            btnTxt.Position = Vector2.new(wx + 394, cy + 12)
+            btnTxt.Text = tostring(ref[key])
+            btnTxt.Position = Vector2.new(wx + 392, cy + 12)
             btnTxt.Center = true
         end,
         hitTest = function(self, mx, my, wx, wy)
             local cy = wy + self.contentY
-            return mx >= wx + 356 and mx <= wx + 432 and my >= cy + 8 and my <= cy + 34
+            return mx >= wx + 352 and mx <= wx + 432 and my >= cy + 7 and my <= cy + 33
         end,
         click = function(self)
             self.idx = (self.idx % #self.options) + 1
@@ -548,46 +698,101 @@ local function RenderGUI()
         toggleBtnY = vs.Y - 100
         tglRect.y = toggleBtnY - math.floor(tglRect.h / 2)
     end
+    local mp = UserInputService:GetMouseLocation()
+    guiMouse = mp
+    local mx, my = mp.X, mp.Y
+
     if not W.show then
         for _, d in ipairs(allDrawings) do
             d.Visible = false
         end
-        toggleBg.Visible = true
-        toggleBg:set(tglRect.x, tglRect.y, tglRect.w, tglRect.h)
+        local fcx = tglRect.x + tglRect.w / 2
+        local fcy = tglRect.y + tglRect.h / 2
+        local fHover = inRect(mx, my, tglRect.x, tglRect.y, tglRect.w, tglRect.h)
+        toggleCircle.Visible = true
+        toggleCircle.Radius = 28
+        toggleCircle.Position = Vector2.new(fcx, fcy)
+        toggleCircle.Color = fHover and UI.Accent or UI.AccentDim
+        toggleRing.Visible = true
+        toggleRing.Radius = 30
+        toggleRing.Thickness = 2
+        toggleRing.Position = Vector2.new(fcx, fcy)
+        toggleRing.Color = UI.Accent
         toggleTxt.Visible = true
         toggleTxt.Color = UI.Text
-        toggleTxt.Position = Vector2.new(tglRect.x + math.floor(tglRect.w / 2), tglRect.y + math.floor(tglRect.h / 2))
+        toggleTxt.Position = Vector2.new(fcx, fcy - 13)
         lastTab = W.tab
         return
     end
+
     local wx, wy = W.x, W.y
-    toggleBg.Visible = false
+    toggleCircle.Visible = false
+    toggleRing.Visible = false
     toggleTxt.Visible = false
+
+    -- Panel + header
     winBg:set(wx, wy, W.w, W.h)
     winBorder:setPosSize(wx, wy, W.w, W.h)
+    headerBg:set(wx, wy, W.w, 40)
     sidebarBg:set(wx, wy + 40, 170, W.h - 40)
+
+    headerLine.Visible = true
+    headerLine.From = Vector2.new(wx, wy + 40)
+    headerLine.To = Vector2.new(wx + W.w, wy + 40)
+    headerLine.Color = UI.Accent
+
+    dividerLine.Visible = true
+    dividerLine.From = Vector2.new(wx + 170, wy + 41)
+    dividerLine.To = Vector2.new(wx + 170, wy + W.h)
+    dividerLine.Color = UI.Border
+
+    -- Title + badge
     titleTxt.Visible = true
     titleTxt.Color = UI.Accent
-    titleTxt.Position = Vector2.new(wx + 15, wy + 11)
+    titleTxt.Position = Vector2.new(wx + 16, wy + 9)
+    badgeBg:set(wx + 138, wy + 13, 48, 16)
+    badgeBg.Color = UI.Accent
     subTxt.Visible = true
-    subTxt.Position = Vector2.new(wx + 135, wy + 12)
+    subTxt.Color = UI.Text
+    subTxt.Position = Vector2.new(wx + 162, wy + 14)
+
+    -- Close button
+    local closeHover = inRect(mx, my, wx + W.w - 28, wy + 8, 20, 24)
     closeTxt.Visible = true
-    closeTxt.Position = Vector2.new(wx + W.w - 25, wy + 11)
-    accentLine.Visible = true
-    accentLine.From = Vector2.new(wx + 1.5, wy + 48)
-    accentLine.To = Vector2.new(wx + 1.5, wy + 48 + (W.h - 60))
-    accentLine.Thickness = 3
-    accentLine.Color = UI.Accent
+    closeTxt.Color = closeHover and Color3.fromRGB(255, 90, 90) or UI.TextDim
+    closeTxt.Position = Vector2.new(wx + W.w - 18, wy + 10)
+
+    -- Sidebar tabs
+    local activeIdx
     for _, btn in ipairs(tabBtns) do
         local by = wy + 40 + (btn.idx - 1) * 40 + 8
         local isActive = btn.name == W.tab
-        btn.bg:set(wx + 5, by, 160, 36)
-        btn.bg.Color = isActive and UI.Accent or UI.Surface
-        btn.bg.Transparency = isActive and 0.2 or 0.85
+        if isActive then activeIdx = btn.idx end
+        local hover = inRect(mx, my, wx + 5, by, 160, 36)
+        btn.bg:set(wx + 8, by, 154, 34)
+        if isActive then
+            btn.bg.Color = UI.Accent
+            btn.bg.Transparency = 0.75
+        elseif hover then
+            btn.bg.Color = UI.CardHover
+            btn.bg.Transparency = 0.15
+        else
+            btn.bg.Color = UI.Surface
+            btn.bg.Transparency = 1
+        end
         btn.txt.Visible = true
-        btn.txt.Position = Vector2.new(wx + 18, by + 10)
-        btn.txt.Color = isActive and UI.Text or UI.TextDim
+        btn.txt.Position = Vector2.new(wx + 24, by + 9)
+        btn.txt.Color = (isActive or hover) and UI.Text or UI.TextDim
     end
+    if activeIdx then
+        local by = wy + 40 + (activeIdx - 1) * 40 + 8
+        tabIndicator.Visible = true
+        tabIndicator.Color = UI.Accent
+        tabIndicator:set(wx + 8, by + 6, 3, 22)
+    else
+        tabIndicator.Visible = false
+    end
+
     local scroll = W.scroll[W.tab] or 0
     local cx, cwy = wx + 175, wy + 45 + scroll
     if W.tab ~= lastTab then
@@ -687,24 +892,21 @@ end)
 
 -- Spectator List (Drawing-based)
 local specLabels = {}
-local specT1 = Drawing.new("Triangle")
-specT1.Visible = false; specT1.Filled = true; specT1.Thickness = 1
-specT1.Color = Color3.fromRGB(25, 25, 35); specT1.Transparency = 0
-local specT2 = Drawing.new("Triangle")
-specT2.Visible = false; specT2.Filled = true; specT2.Thickness = 1
-specT2.Color = Color3.fromRGB(25, 25, 35); specT2.Transparency = 0
+local specBg = NewFill(Color3.fromRGB(25, 25, 35), 0)
+specBg.Visible = false
 local specTitle = Drawing.new("Text")
 specTitle.Visible = false
 specTitle.Font = 3
 specTitle.Size = 11
 specTitle.Center = false
 specTitle.Color = UI.Accent
+specTitle.ZIndex = 10
 specTitle.Text = "Spectators"
 
 local function UpdateSpectatorList()
     local cam = workspace.CurrentCamera
     if not S.Misc.SpectatorList or not cam or not cam.ViewportSize or cam.ViewportSize.X == 0 then
-        specT1.Visible = false; specT2.Visible = false
+        specBg.Visible = false
         specTitle.Visible = false
         for _, lbl in pairs(specLabels) do
             lbl.Visible = false
@@ -732,13 +934,8 @@ local function UpdateSpectatorList()
     end
     local count = #specs
     local height = math.max(24, 24 + count * 18)
-    specT1.Visible = true; specT2.Visible = true
-    specT1.PointA = Vector2.new(bx, by)
-    specT1.PointB = Vector2.new(bx + 180, by)
-    specT1.PointC = Vector2.new(bx, by + height)
-    specT2.PointA = Vector2.new(bx + 180, by)
-    specT2.PointB = Vector2.new(bx, by + height)
-    specT2.PointC = Vector2.new(bx + 180, by + height)
+    specBg.Visible = true
+    specBg:set(bx, by, 180, height)
     specTitle.Visible = true
     specTitle.Position = Vector2.new(bx + 5, by + 2)
     for i, name in ipairs(specs) do
@@ -749,6 +946,7 @@ local function UpdateSpectatorList()
             lbl.Size = 11
             lbl.Center = false
             lbl.Color = UI.Text
+            lbl.ZIndex = 10
             specLabels[name] = lbl
         end
         specLabels[name].Visible = true
@@ -1359,11 +1557,9 @@ RunService.RenderStepped:Connect(function()
 
     if S.Visuals.RainbowMode then
         RainbowHue = (now * S.Visuals.RainbowSpeed * 0.15) % 1
-        UI.Accent = Color3.fromHSV(RainbowHue, 0.9, 1)
-        subTxt.Color = UI.Accent
+        UI.Accent = Color3.fromHSV(RainbowHue, 0.85, 1)
     else
-        UI.Accent = Color3.fromRGB(200, 100, 255)
-        subTxt.Color = UI.TextDim
+        UI.Accent = Color3.fromRGB(171, 130, 255)
     end
 
     if S.Movement.SpeedEnabled or S.Movement.JumpEnabled then
@@ -1572,6 +1768,6 @@ Players.PlayerRemoving:Connect(function(player)
     RoleCache[player] = nil
 end)
 
-print("Kitty Hub v3 (MM2) Loaded!")
+print("Kitty Hub v6 (MM2) Loaded!")
 print("[X] = GUI | [" .. (S.MM2.NoclipKey or "N") .. "] = Noclip | [" .. S.Aimbot.AimbotKey .. "] = Auto Aim")
 print("Features: ESP | Tracers | AutoShoot | Prediction | Rainbow | Crosshair | SpectatorList | AutoCollect")

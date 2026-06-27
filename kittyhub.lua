@@ -8,7 +8,11 @@ local GAME_MODULES = {
 print("Kitty Hub: Detecting game...")
 
 local function LoadModule(name)
-    local url = host .. "/" .. name .. ".lua"
+    -- Cache-buster: many executors cache game:HttpGet per-URL for the whole
+    -- session, so without a unique query string they'd replay a stale download
+    -- and never pick up edits. tick()+random makes every fetch a fresh URL.
+    local bust = tostring(tick()) .. "_" .. tostring(math.random(100000, 999999))
+    local url = host .. "/" .. name .. ".lua?v=" .. bust
     print("Kitty Hub: Loading " .. name .. ".lua...")
     local success, result = pcall(function()
         return loadstring(game:HttpGet(url))()
