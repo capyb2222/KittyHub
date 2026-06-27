@@ -1,102 +1,48 @@
--- MM2 Aimbot & ESP v3
+-- MM2 Aimbot & ESP — Kitty Hub (v7: native Roblox UI, Xeno-compatible)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 local env = (pcall(getgenv) and getgenv()) or _G
-local tableFind = table.find or function(t, v)
-    for i, x in pairs(t) do if x == v then return i end end
-end
-local hasDrawing = pcall(function() local d = Drawing.new("Text"); d:Remove() end)
 
-if not hasDrawing then
-    warn("Kitty Hub: Drawing API not supported. Aborting.")
-    return
-end
-
-local dbg = Drawing.new("Text")
-dbg.Text = "Kitty Hub MM2 v6 loaded — Press X"
-dbg.Size = 18
-dbg.Position = Vector2.new(10, 10)
-dbg.Font = 3
-dbg.Color = Color3.new(0, 1, 0)
-dbg.Center = false
-dbg.Visible = true
-task.delay(8, function() if dbg and dbg.Remove then dbg:Remove() end end)
-
--- On-screen capability readout: which Drawing primitives can this executor
--- create? mm2's UI now needs only Line + Text (Circle is optional). If the UI
--- still doesn't appear, this line tells us exactly what's missing.
-local function __canDraw(kind)
-    return (pcall(function()
-        local d = Drawing.new(kind)
-        if d and d.Remove then d:Remove() end
-    end))
-end
-local __probe = Drawing.new("Text")
-__probe.Text = "KH caps  Text:" .. (__canDraw("Text") and "OK" or "X")
-    .. "  Line:" .. (__canDraw("Line") and "OK" or "X")
-    .. "  Tri:" .. (__canDraw("Triangle") and "OK" or "X")
-    .. "  Circle:" .. (__canDraw("Circle") and "OK" or "X")
-    .. "  Square:" .. (__canDraw("Square") and "OK" or "X")
-__probe.Size = 18
-__probe.Position = Vector2.new(10, 32)
-__probe.Font = 3
-__probe.Color = Color3.new(1, 1, 0)
-__probe.Center = false
-__probe.Visible = true
-task.delay(15, function() if __probe and __probe.Remove then __probe:Remove() end end)
+-- Drawing is still used for in-world ESP/gun text. Xeno renders Drawing TEXT
+-- fine; only filled shapes/thick lines are unsupported, which is exactly why
+-- the MENU is now built from native Roblox GUI instead of the Drawing API.
+local hasDrawing = pcall(function() local d = Drawing.new("Text"); if d and d.Remove then d:Remove() end end)
 
 env.CatSettings = env.CatSettings or {
-    ESP = {
-        Enabled = false, Boxes = false, Names = false, Roles = false,
-        Chams = false, Tracers = false, Distance = false, MaxDistance = 1000
-    },
-    Aimbot = {
-        Enabled = true, AutoShoot = false, AimbotKey = "C", Prediction = false,
-        LeadTime = 0.15, AimPart = "Head", OffScreen = true, AutoUnequip = false,
-        FOVCircle = false, FOVRadius = 200, FOVColor = "#C864FF"
-    },
-    MM2 = {
-        GunESP = false, Noclip = false, NoclipKey = "N", AutoCollect = false
-    },
-    Movement = {
-        SpeedEnabled = false, SpeedValue = 16,
-        JumpEnabled = false, JumpValue = 50
-    },
-    Visuals = {
-        RainbowMode = false, RainbowSpeed = 1
-    },
-    Crosshair = {
-        Enabled = false, Style = "Cross", Size = 10, Thickness = 2
-    },
-    Misc = {
-        SpectatorList = false
-    }
+    ESP = { Enabled = false, Names = false, Roles = false, Chams = false, Distance = false,
+            MaxDistance = 1000, Boxes = false, Tracers = false },
+    Aimbot = { Enabled = true, AutoShoot = false, AimbotKey = "C", Prediction = false,
+               LeadTime = 0.15, AimPart = "Head", OffScreen = true, AutoUnequip = false, Debug = false },
+    MM2 = { GunESP = false, Noclip = false, NoclipKey = "N", AutoCollect = false },
+    Movement = { SpeedEnabled = false, SpeedValue = 16, JumpEnabled = false, JumpValue = 50 }
 }
 
 local S = env.CatSettings
-
--- Backfill new Aimbot keys for users whose CatSettings was cached by an older run
+-- Backfill defaults for users whose CatSettings was cached by an older run
+S.ESP = S.ESP or {}; S.Aimbot = S.Aimbot or {}; S.MM2 = S.MM2 or {}; S.Movement = S.Movement or {}
 if S.Aimbot.Enabled == nil then S.Aimbot.Enabled = true end
 if S.Aimbot.OffScreen == nil then S.Aimbot.OffScreen = true end
-if S.Aimbot.AutoUnequip == nil then S.Aimbot.AutoUnequip = false end
+if S.Aimbot.AimbotKey == nil then S.Aimbot.AimbotKey = "C" end
+if S.Aimbot.AimPart == nil then S.Aimbot.AimPart = "Head" end
+if S.Aimbot.LeadTime == nil then S.Aimbot.LeadTime = 0.15 end
+if S.Aimbot.Debug == nil then S.Aimbot.Debug = false end
+if S.MM2.NoclipKey == nil then S.MM2.NoclipKey = "N" end
+if S.ESP.MaxDistance == nil then S.ESP.MaxDistance = 1000 end
+if S.Movement.SpeedValue == nil then S.Movement.SpeedValue = 16 end
+if S.Movement.JumpValue == nil then S.Movement.JumpValue = 50 end
 
-local function ParseFOVColor()
-    local hex = S.Aimbot.FOVColor and S.Aimbot.FOVColor:gsub("#", "")
-    if hex and #hex == 6 then
-        local r = tonumber(hex:sub(1, 2), 16)
-        local g = tonumber(hex:sub(3, 4), 16)
-        local b = tonumber(hex:sub(5, 6), 16)
-        if r and g and b then
-            return Color3.fromRGB(r, g, b)
-        end
-    end
-    return nil
+local tableFind = table.find or function(t, v)
+    for i, x in pairs(t) do if x == v then return i end end
 end
 
+----------------------------------------------------------------------
+-- Role detection
+----------------------------------------------------------------------
 local RoleCache = {}
 local RemoteCache = {}
 
@@ -148,12 +94,9 @@ end
 
 local function OnCharacterAdded(player)
     RoleCache[player] = nil
-    local function onToolAdded()
-        RoleCache[player] = nil
-    end
     local char = player.Character
     if char then
-        char.ChildAdded:Connect(onToolAdded)
+        char.ChildAdded:Connect(function() RoleCache[player] = nil end)
     end
 end
 
@@ -161,977 +104,46 @@ local function OnPlayerAdded(player)
     player.CharacterAdded:Connect(function() OnCharacterAdded(player) end)
     local bp = player:FindFirstChild("Backpack")
     if bp then
-        bp.ChildAdded:Connect(function()
-            RoleCache[player] = nil
-        end)
+        bp.ChildAdded:Connect(function() RoleCache[player] = nil end)
     end
     player.ChildAdded:Connect(function(child)
         if child.Name == "Backpack" then
-            child.ChildAdded:Connect(function()
-                RoleCache[player] = nil
-            end)
+            child.ChildAdded:Connect(function() RoleCache[player] = nil end)
         end
     end)
 end
 
 Players.PlayerAdded:Connect(OnPlayerAdded)
-
 for _, player in ipairs(Players:GetPlayers()) do
-    if player ~= LocalPlayer then
-        OnPlayerAdded(player)
-    end
+    if player ~= LocalPlayer then OnPlayerAdded(player) end
 end
 
--- Drawing-based GUI
-local UI = {
-    Bg = Color3.fromRGB(24, 25, 33),
-    Surface = Color3.fromRGB(31, 33, 45),
-    Card = Color3.fromRGB(38, 40, 55),
-    CardHover = Color3.fromRGB(51, 54, 73),
-    Accent = Color3.fromRGB(124, 152, 255),
-    AccentDim = Color3.fromRGB(74, 96, 178),
-    Text = Color3.fromRGB(238, 240, 248),
-    TextDim = Color3.fromRGB(141, 144, 164),
-    Border = Color3.fromRGB(53, 56, 78),
-    On = Color3.fromRGB(86, 214, 140),
-    OffTrack = Color3.fromRGB(58, 60, 81),
-    OffKnob = Color3.fromRGB(131, 134, 157)
-}
-
-local W = {
-    x = 50, y = 50, w = 620, h = 420,
-    show = false,
-    tab = "ESP",
-    tabs = {"ESP", "Aimbot", "MM2", "Movement", "Visuals", "Misc"},
-    scroll = {},
-    dragging = false,
-    dragStart = Vector2.new(0, 0),
-    dragWinPos = Vector2.new(0, 0)
-}
-
-for _, name in ipairs(W.tabs) do
-    W.scroll[name] = 0
-end
-
-local allDrawings = {}
-
--- Rectangle fill built from stacked, slightly-overlapping horizontal Lines.
--- This avoids Drawing "Triangle"/"Square" (unsupported on some executors) and
--- the small strips + overlap keep the fill SOLID even if the executor caps
--- line thickness. ZIndex keeps backgrounds beneath text/elements.
-local FILL_STRIP_H = 6
-local function NewFill(color, transparency, zindex)
-    local fill = {
-        _color = color or Color3.new(1, 1, 1),
-        _transparency = transparency or 0,
-        _zindex = zindex or 1,
-        _lines = {},
-        _visible = true
-    }
-    function fill:_line(i)
-        while #self._lines < i do
-            -- Guard creation: if the executor hits a Drawing-object cap this
-            -- returns nil instead of throwing, so the UI degrades gracefully.
-            local ok, l = pcall(Drawing.new, "Line")
-            if not ok or not l then break end
-            l.Visible = false
-            l.Thickness = 1
-            l.Color = self._color
-            l.Transparency = self._transparency
-            l.ZIndex = self._zindex
-            table.insert(allDrawings, l)
-            table.insert(self._lines, l)
-        end
-        return self._lines[i]
-    end
-    function fill:set(x, y, w, h)
-        local count = math.max(1, math.ceil(h / FILL_STRIP_H))
-        for i = 1, count do
-            local l = self:_line(i)
-            if not l then break end
-            local sy = y + (i - 1) * FILL_STRIP_H
-            local sh = math.min(h - (i - 1) * FILL_STRIP_H, FILL_STRIP_H)
-            l.Visible = self._visible
-            l.Color = self._color
-            l.Transparency = self._transparency
-            l.ZIndex = self._zindex
-            l.From = Vector2.new(x, sy + sh / 2)
-            l.To = Vector2.new(x + w, sy + sh / 2)
-            l.Thickness = sh + 3 -- overlap neighbours so there are no gaps
-        end
-        for i = count + 1, #self._lines do
-            self._lines[i].Visible = false
-        end
-    end
-    return setmetatable(fill, {
-        __index = function(t, k)
-            if k == "Visible" then return t._visible end
-            if k == "Color" then return t._color end
-            if k == "Transparency" then return t._transparency end
-            return rawget(t, k)
-        end,
-        __newindex = function(t, k, v)
-            if k == "Visible" then
-                t._visible = v
-                for _, l in ipairs(t._lines) do l.Visible = v end
-            elseif k == "Color" then
-                t._color = v
-                for _, l in ipairs(t._lines) do l.Color = v end
-            elseif k == "Transparency" then
-                t._transparency = v
-                for _, l in ipairs(t._lines) do l.Transparency = v end
-            end
-            rawset(t, k, v)
-        end
-    })
-end
-
--- Line-quad outline (avoids Square for compatibility)
-local function NewOutline(color, transparency, zindex)
-    local lines = {}
-    for i = 1, 4 do
-        local l = Drawing.new("Line")
-        l.Visible = false
-        l.Thickness = 2
-        l.Color = color or Color3.new(1, 1, 1)
-        l.Transparency = transparency or 0
-        l.ZIndex = zindex or 4
-        table.insert(allDrawings, l)
-        table.insert(lines, l)
-    end
-    local outline = { _lines = lines, _visible = true, _color = color or Color3.new(1, 1, 1) }
-    function outline:setPosSize(x, y, w, h)
-        for _, l in ipairs(self._lines) do l.Visible = self._visible end
-        self._lines[1].From = Vector2.new(x, y); self._lines[1].To = Vector2.new(x + w, y)
-        self._lines[2].From = Vector2.new(x + w, y); self._lines[2].To = Vector2.new(x + w, y + h)
-        self._lines[3].From = Vector2.new(x + w, y + h); self._lines[3].To = Vector2.new(x, y + h)
-        self._lines[4].From = Vector2.new(x, y + h); self._lines[4].To = Vector2.new(x, y)
-    end
-    return setmetatable(outline, {
-        __index = function(t, k)
-            if k == "Visible" then return t._visible end
-            if k == "Color" then return t._color end
-            return rawget(t, k)
-        end,
-        __newindex = function(t, k, v)
-            if k == "Visible" then
-                t._visible = v
-                for _, l in ipairs(t._lines) do l.Visible = v end
-            elseif k == "Color" then
-                t._color = v
-                for _, l in ipairs(t._lines) do l.Color = v end
-            end
-            rawset(t, k, v)
-        end
-    })
-end
-
-local function NewText(color, size, center, zindex)
-    local t = Drawing.new("Text")
-    t.Visible = false
-    t.Font = 3
-    t.Size = size or 14
-    t.Center = center or false
-    t.Color = color or Color3.new(1, 1, 1)
-    t.ZIndex = zindex or 10
-    table.insert(allDrawings, t)
-    return t
-end
-
--- Probe Circle support once. Some executors' Drawing API only implements a
--- subset (Text/Line/Triangle), so creating a Circle would throw and abort the
--- whole script. When unsupported we fall back to a square shape below.
-local circleOK = pcall(function()
-    local d = Drawing.new("Circle")
-    assert(d, "Circle unsupported")
-    d.Radius = 1
-    d:Remove()
-end)
-
-local function NewCircle(color, filled, transparency, zindex)
-    if circleOK then
-        local ok, c = pcall(Drawing.new, "Circle")
-        if ok and c then
-            c.Visible = false
-            c.Filled = filled ~= false
-            c.NumSides = 32
-            c.Thickness = 1
-            c.Radius = 6
-            c.Color = color or Color3.new(1, 1, 1)
-            c.Transparency = transparency or 0
-            c.ZIndex = zindex or 3
-            table.insert(allDrawings, c)
-            return c
-        end
-    end
-    -- Fallback: a centered square built from the (always-supported) line
-    -- fill, exposing the same Visible/Position/Radius/Color interface so all
-    -- the draw code works unchanged.
-    local fillObj = NewFill(color, transparency, zindex or 3)
-    fillObj.Visible = false
-    local proxy = { _pos = Vector2.new(0, 0), _radius = 6, _vis = false }
-    local function redraw()
-        if not proxy._vis then fillObj.Visible = false; return end
-        local r = proxy._radius
-        fillObj.Visible = true
-        fillObj:set(proxy._pos.X - r, proxy._pos.Y - r, r * 2, r * 2)
-    end
-    return setmetatable(proxy, {
-        __newindex = function(t, k, v)
-            if k == "Visible" then
-                t._vis = v
-                if v then redraw() else fillObj.Visible = false end
-            elseif k == "Position" then
-                t._pos = v; redraw()
-            elseif k == "Radius" then
-                t._radius = v; redraw()
-            elseif k == "Color" then
-                fillObj.Color = v
-            elseif k == "Transparency" then
-                fillObj.Transparency = v
-            else
-                rawset(t, k, v)
-            end
-        end
-    })
-end
-
-local function inRect(px, py, x, y, w, h)
-    return px >= x and px <= x + w and py >= y and py <= y + h
-end
-
-local guiMouse = Vector2.new(0, 0)
-
-local winBg = NewFill(UI.Bg, 0)
-local headerBg = NewFill(UI.Surface, 0)
-local sidebarBg = NewFill(UI.Surface, 0)
-local titleTxt = NewText(UI.Accent, 22, false)
-titleTxt.Text = "Kitty Hub"
-local badgeBg = NewFill(UI.Accent, 0)
-local subTxt = NewText(UI.Text, 12, true)
-subTxt.Text = "MM2"
-local closeTxt = NewText(UI.TextDim, 18, true)
-closeTxt.Text = "X"
-local headerLine = Drawing.new("Line")
-headerLine.Visible = false
-headerLine.Thickness = 2
-headerLine.Color = UI.Accent
-headerLine.Transparency = 0
-headerLine.ZIndex = 4
-table.insert(allDrawings, headerLine)
-local dividerLine = Drawing.new("Line")
-dividerLine.Visible = false
-dividerLine.Thickness = 1
-dividerLine.Color = UI.Border
-dividerLine.Transparency = 0
-dividerLine.ZIndex = 4
-table.insert(allDrawings, dividerLine)
-
-local winBorder = NewOutline(UI.Border, 0)
-local tabIndicator = NewFill(UI.Accent, 0, 3)
-
--- Floating launcher button (circular)
-local toggleRing = NewCircle(UI.Accent, false, 0)
-toggleRing.NumSides = 64
-local toggleCircle = NewCircle(UI.AccentDim, true, 0)
-toggleCircle.NumSides = 64
-local toggleTxt = NewText(UI.Text, 26, true)
-toggleTxt.Text = "K"
-
-local tabBtns = {}
-for i, name in ipairs(W.tabs) do
-    local bg = NewFill(UI.Surface, 0.85)
-    local txt = NewText(UI.Text, 15, false)
-    txt.Text = name
-    table.insert(tabBtns, {bg = bg, txt = txt, name = name, idx = i})
-end
-
-local controls = {}
-local controlsByTab = {}
-local contentY = {}
-
-for _, name in ipairs(W.tabs) do
-    controlsByTab[name] = {}
-    contentY[name] = 12
-end
-
-local function addControl(tabName, ctrl)
-    table.insert(controls, ctrl)
-    table.insert(controlsByTab[tabName], #controls)
-    ctrl.contentY = contentY[tabName]
-    contentY[tabName] = contentY[tabName] + ctrl.h + 9
-end
-
-local function Toggle(tabName, label, ref, key, callback)
-    local bg = NewFill(UI.Card, 0)
-    local lbl = NewText(UI.Text, 15, false)
-    lbl.Text = label
-    local trackMid = NewFill(UI.OffTrack, 0)
-    local trackL = NewCircle(UI.OffTrack, true, 0)
-    local trackR = NewCircle(UI.OffTrack, true, 0)
-    local knob = NewCircle(UI.OffKnob, true, 0)
-    local stateTxt = NewText(UI.TextDim, 12, true)
-
-    local ctrl = {
-        type = "toggle", h = 40, ref = ref, key = key, callback = callback,
-        parts = {bg, lbl, trackMid, trackL, trackR, knob, stateTxt},
-        draw = function(self, wx, wy)
-            local cy = wy + self.contentY
-            local hover = inRect(guiMouse.X, guiMouse.Y, wx + 4, cy, 432, self.h)
-            bg:set(wx + 4, cy, 432, self.h)
-            bg.Color = hover and UI.CardHover or UI.Card
-            lbl.Visible = true
-            lbl.Position = Vector2.new(wx + 16, cy + 12)
-
-            local th, tw = 22, 46
-            local tx = wx + 4 + 432 - 16 - tw
-            local ty = cy + (self.h - th) / 2
-            local midY = ty + th / 2
-            trackMid:set(tx + th / 2, ty, tw - th, th)
-            trackL.Visible = true; trackL.Radius = th / 2; trackL.Position = Vector2.new(tx + th / 2, midY)
-            trackR.Visible = true; trackR.Radius = th / 2; trackR.Position = Vector2.new(tx + tw - th / 2, midY)
-            knob.Visible = true; knob.Radius = th / 2 - 3
-            stateTxt.Visible = true
-            stateTxt.Position = Vector2.new(tx - 22, cy + 13)
-
-            local on = ref[key]
-            local trackColor = on and UI.On or UI.OffTrack
-            trackMid.Color = trackColor
-            trackL.Color = trackColor
-            trackR.Color = trackColor
-            if on then
-                knob.Color = Color3.new(1, 1, 1)
-                knob.Position = Vector2.new(tx + tw - th / 2, midY)
-                stateTxt.Text = "ON"
-                stateTxt.Color = UI.On
-            else
-                knob.Color = UI.OffKnob
-                knob.Position = Vector2.new(tx + th / 2, midY)
-                stateTxt.Text = "OFF"
-                stateTxt.Color = UI.TextDim
-            end
-        end,
-        hitTest = function(self, mx, my, wx, wy)
-            local cy = wy + self.contentY
-            return mx >= wx + 4 and mx <= wx + 436 and my >= cy and my <= cy + self.h
-        end,
-        click = function(self)
-            ref[key] = not ref[key]
-            if self.callback then self.callback(ref[key]) end
-        end
-    }
-    addControl(tabName, ctrl)
-    return ctrl
-end
-
-local function Slider(tabName, label, ref, key, minV, maxV, callback)
-    minV = minV or 0
-    maxV = maxV or 100
-    local bg = NewFill(UI.Card, 0)
-    local lbl = NewText(UI.Text, 15, false)
-    lbl.Text = label
-    local valTxt = NewText(UI.Accent, 15, false)
-    local track = NewFill(UI.OffTrack, 0)
-    local fill = NewFill(UI.Accent, 0)
-    local thumb = NewCircle(Color3.new(1, 1, 1), true, 0)
-
-    local ctrl = {
-        type = "slider", h = 50, minV = minV, maxV = maxV,
-        ref = ref, key = key, callback = callback,
-        parts = {bg, lbl, valTxt, track, fill, thumb},
-        draw = function(self, wx, wy)
-            local cy = wy + self.contentY
-            local hover = inRect(guiMouse.X, guiMouse.Y, wx + 4, cy, 432, self.h)
-            bg:set(wx + 4, cy, 432, self.h)
-            bg.Color = hover and UI.CardHover or UI.Card
-            lbl.Visible = true
-            lbl.Position = Vector2.new(wx + 16, cy + 8)
-            valTxt.Visible = true
-            valTxt.Text = tostring(math.floor(ref[key] or 0))
-            valTxt.Color = UI.Accent
-            valTxt.Position = Vector2.new(wx + 398, cy + 8)
-            local pct = math.max(0, math.min(((ref[key] or 0) - minV) / (maxV - minV), 1))
-            local tX, tY, tW = wx + 16, cy + 36, 408
-            track:set(tX, tY, tW, 5)
-            track.Color = UI.OffTrack
-            fill.Visible = pct > 0
-            if pct > 0 then fill:set(tX, tY, tW * pct, 5) end
-            fill.Color = UI.Accent
-            thumb.Visible = true
-            thumb.Radius = 8
-            thumb.Color = Color3.new(1, 1, 1)
-            thumb.Position = Vector2.new(tX + tW * pct, tY + 2)
-        end,
-        hitTest = function(self, mx, my, wx, wy)
-            local cy = wy + self.contentY
-            return mx >= wx + 14 and mx <= wx + 426 and my >= cy + 28 and my <= cy + 48
-        end,
-        beginDrag = function(self, mx, my, wx, wy)
-            local pct = math.max(0, math.min((mx - (wx + 16)) / 408, 1))
-            local val = minV + (maxV - minV) * pct
-            ref[key] = math.max(minV, math.min(math.floor(val + 0.5), maxV))
-            if self.callback then self.callback(ref[key]) end
-        end,
-        drag = function(self, mx, my, wx, wy)
-            local pct = math.max(0, math.min((mx - (wx + 16)) / 408, 1))
-            local val = minV + (maxV - minV) * pct
-            ref[key] = math.max(minV, math.min(math.floor(val + 0.5), maxV))
-            if self.callback then self.callback(ref[key]) end
-        end
-    }
-    addControl(tabName, ctrl)
-    return ctrl
-end
-
-local function Cycle(tabName, label, ref, key, options)
-    local bg = NewFill(UI.Card, 0)
-    local lbl = NewText(UI.Text, 15, false)
-    lbl.Text = label
-    local btnBg = NewFill(UI.Accent, 0)
-    local btnTxt = NewText(UI.Text, 14, true)
-
-    local idx = 1
-    for i, opt in ipairs(options) do
-        if opt == ref[key] then idx = i; break end
-    end
-
-    local ctrl = {
-        type = "cycle", h = 40, options = options, idx = idx, ref = ref, key = key,
-        parts = {bg, lbl, btnBg, btnTxt},
-        draw = function(self, wx, wy)
-            local cy = wy + self.contentY
-            for i, opt in ipairs(self.options) do
-                if opt == ref[key] then self.idx = i; break end
-            end
-            local hover = inRect(guiMouse.X, guiMouse.Y, wx + 4, cy, 432, self.h)
-            bg:set(wx + 4, cy, 432, self.h)
-            bg.Color = hover and UI.CardHover or UI.Card
-            lbl.Visible = true
-            lbl.Position = Vector2.new(wx + 16, cy + 12)
-            local bHover = inRect(guiMouse.X, guiMouse.Y, wx + 352, cy + 7, 80, 26)
-            btnBg:set(wx + 352, cy + 7, 80, 26)
-            btnBg.Color = bHover and UI.Accent or UI.AccentDim
-            btnTxt.Visible = true
-            btnTxt.Text = tostring(ref[key])
-            btnTxt.Position = Vector2.new(wx + 392, cy + 12)
-            btnTxt.Center = true
-        end,
-        hitTest = function(self, mx, my, wx, wy)
-            local cy = wy + self.contentY
-            return mx >= wx + 352 and mx <= wx + 432 and my >= cy + 7 and my <= cy + 33
-        end,
-        click = function(self)
-            self.idx = (self.idx % #self.options) + 1
-            ref[key] = self.options[self.idx]
-        end
-    }
-    addControl(tabName, ctrl)
-    return ctrl
-end
-
-Toggle("ESP", "Enabled", S.ESP, "Enabled")
-Toggle("ESP", "Boxes", S.ESP, "Boxes")
-Toggle("ESP", "Names", S.ESP, "Names")
-Toggle("ESP", "Roles", S.ESP, "Roles")
-Toggle("ESP", "Chams", S.ESP, "Chams")
-Toggle("ESP", "Tracers", S.ESP, "Tracers")
-Toggle("ESP", "Distance", S.ESP, "Distance")
-
-Toggle("Aimbot", "Enabled", S.Aimbot, "Enabled")
-Toggle("Aimbot", "Auto Shoot", S.Aimbot, "AutoShoot")
-Toggle("Aimbot", "Prediction", S.Aimbot, "Prediction")
-Toggle("Aimbot", "FOV Circle", S.Aimbot, "FOVCircle")
-Toggle("Aimbot", "Off-Screen Aim", S.Aimbot, "OffScreen")
-Toggle("Aimbot", "Auto Unequip", S.Aimbot, "AutoUnequip")
-Slider("Aimbot", "FOV Radius", S.Aimbot, "FOVRadius", 50, 400)
-Cycle("Aimbot", "Aimbot Key", S.Aimbot, "AimbotKey", {"C", "G", "V", "B", "X", "Z", "F", "T", "Q", "E", "R", "Y"})
-
-Toggle("MM2", "Gun ESP", S.MM2, "GunESP")
-Toggle("MM2", "Noclip", S.MM2, "Noclip", function(v)
-    if v then EnableNoclip() else DisableNoclip() end
-end)
-Toggle("MM2", "Auto Collect", S.MM2, "AutoCollect")
-Cycle("MM2", "Noclip Key", S.MM2, "NoclipKey", {"N", "C", "G", "V", "B", "X", "Z", "F", "T", "Q", "E", "R", "Y"})
-
-Toggle("Movement", "Speed Hack", S.Movement, "SpeedEnabled", function(v)
-    ApplyMovementSettings()
-end)
-Slider("Movement", "Speed Value", S.Movement, "SpeedValue", 16, 100, function(v)
-    ApplyMovementSettings()
-end)
-Toggle("Movement", "Jump Hack", S.Movement, "JumpEnabled", function(v)
-    ApplyMovementSettings()
-end)
-Slider("Movement", "Jump Value", S.Movement, "JumpValue", 50, 200, function(v)
-    ApplyMovementSettings()
-end)
-
-Toggle("Visuals", "Rainbow Mode", S.Visuals, "RainbowMode")
-Slider("Visuals", "Rainbow Speed", S.Visuals, "RainbowSpeed", 0.5, 5)
-Toggle("Visuals", "Crosshair", S.Crosshair, "Enabled")
-Cycle("Visuals", "Crosshair Style", S.Crosshair, "Style", {"Dot", "Cross", "Circle"})
-Slider("Visuals", "Crosshair Size", S.Crosshair, "Size", 5, 30)
-Slider("Visuals", "Crosshair Thickness", S.Crosshair, "Thickness", 1, 5)
-
-Toggle("Misc", "Spectator List", S.Misc, "SpectatorList")
-
-local lastTab = W.tab
-local toggleBtnY = 0
-local tglRect = {x = 20, y = 0, w = 72, h = 72}
-local function CenterWindow()
-    local cam = workspace.CurrentCamera
-    if cam and cam.ViewportSize and cam.ViewportSize.X > 0 then
-        W.x = math.floor((cam.ViewportSize.X - W.w) / 2)
-        W.y = math.floor((cam.ViewportSize.Y - W.h) / 2)
-        return true
-    end
-    return false
-end
-task.spawn(function()
-    repeat task.wait() until CenterWindow()
-end)
-
-local function RenderGUI()
-    local cam = workspace.CurrentCamera
-    local vs = cam and cam.ViewportSize
-    if vs then
-        toggleBtnY = vs.Y - 100
-        tglRect.y = toggleBtnY - math.floor(tglRect.h / 2)
-    end
-    local mp = UserInputService:GetMouseLocation()
-    guiMouse = mp
-    local mx, my = mp.X, mp.Y
-
-    if not W.show then
-        for _, d in ipairs(allDrawings) do
-            d.Visible = false
-        end
-        local fcx = tglRect.x + tglRect.w / 2
-        local fcy = tglRect.y + tglRect.h / 2
-        local fHover = inRect(mx, my, tglRect.x, tglRect.y, tglRect.w, tglRect.h)
-        toggleCircle.Visible = true
-        toggleCircle.Radius = 28
-        toggleCircle.Position = Vector2.new(fcx, fcy)
-        toggleCircle.Color = fHover and UI.Accent or UI.AccentDim
-        toggleRing.Visible = true
-        toggleRing.Radius = 30
-        toggleRing.Thickness = 2
-        toggleRing.Position = Vector2.new(fcx, fcy)
-        toggleRing.Color = UI.Accent
-        toggleTxt.Visible = true
-        toggleTxt.Color = UI.Text
-        toggleTxt.Position = Vector2.new(fcx, fcy - 13)
-        lastTab = W.tab
-        return
-    end
-
-    local wx, wy = W.x, W.y
-    toggleCircle.Visible = false
-    toggleRing.Visible = false
-    toggleTxt.Visible = false
-
-    -- Panel + header
-    winBg:set(wx, wy, W.w, W.h)
-    winBorder:setPosSize(wx, wy, W.w, W.h)
-    headerBg:set(wx, wy, W.w, 40)
-    sidebarBg:set(wx, wy + 40, 170, W.h - 40)
-
-    headerLine.Visible = true
-    headerLine.From = Vector2.new(wx, wy + 40)
-    headerLine.To = Vector2.new(wx + W.w, wy + 40)
-    headerLine.Color = UI.Accent
-
-    dividerLine.Visible = true
-    dividerLine.From = Vector2.new(wx + 170, wy + 41)
-    dividerLine.To = Vector2.new(wx + 170, wy + W.h)
-    dividerLine.Color = UI.Border
-
-    -- Title + badge
-    titleTxt.Visible = true
-    titleTxt.Color = UI.Accent
-    titleTxt.Position = Vector2.new(wx + 16, wy + 9)
-    badgeBg:set(wx + 138, wy + 13, 48, 16)
-    badgeBg.Color = UI.Accent
-    subTxt.Visible = true
-    subTxt.Color = UI.Text
-    subTxt.Position = Vector2.new(wx + 162, wy + 14)
-
-    -- Close button
-    local closeHover = inRect(mx, my, wx + W.w - 28, wy + 8, 20, 24)
-    closeTxt.Visible = true
-    closeTxt.Color = closeHover and Color3.fromRGB(255, 90, 90) or UI.TextDim
-    closeTxt.Position = Vector2.new(wx + W.w - 18, wy + 10)
-
-    -- Sidebar tabs
-    local activeIdx
-    for _, btn in ipairs(tabBtns) do
-        local by = wy + 40 + (btn.idx - 1) * 40 + 8
-        local isActive = btn.name == W.tab
-        if isActive then activeIdx = btn.idx end
-        local hover = inRect(mx, my, wx + 5, by, 160, 36)
-        btn.bg:set(wx + 8, by, 154, 34)
-        if isActive then
-            btn.bg.Color = UI.Accent
-            btn.bg.Transparency = 0.75
-        elseif hover then
-            btn.bg.Color = UI.CardHover
-            btn.bg.Transparency = 0.15
-        else
-            btn.bg.Color = UI.Surface
-            btn.bg.Transparency = 1
-        end
-        btn.txt.Visible = true
-        btn.txt.Position = Vector2.new(wx + 24, by + 9)
-        btn.txt.Color = (isActive or hover) and UI.Text or UI.TextDim
-    end
-    if activeIdx then
-        local by = wy + 40 + (activeIdx - 1) * 40 + 8
-        tabIndicator.Visible = true
-        tabIndicator.Color = UI.Accent
-        tabIndicator:set(wx + 8, by + 6, 3, 22)
-    else
-        tabIndicator.Visible = false
-    end
-
-    local scroll = W.scroll[W.tab] or 0
-    local cx, cwy = wx + 175, wy + 45 + scroll
-    if W.tab ~= lastTab then
-        for _, idx in ipairs(controlsByTab[lastTab]) do
-            for _, part in ipairs(controls[idx].parts) do
-                part.Visible = false
-            end
-        end
-        lastTab = W.tab
-    end
-    for _, idx in ipairs(controlsByTab[W.tab]) do
-        controls[idx].draw(controls[idx], cx, cwy)
-    end
-end
-
-local activeSlider = nil
-
-UserInputService.InputBegan:Connect(function(input, processed)
-    if processed then return end
-    if input.UserInputType == Enum.UserInputType.MouseWheel and W.show then
-        W.scroll[W.tab] = (W.scroll[W.tab] or 0) + input.Position.Y * 30
-        local cList = controlsByTab[W.tab]
-        if #cList > 0 then
-            local last = controls[cList[#cList]]
-            local total = last.contentY + last.h + 10
-            local maxS = math.max(0, total - 370)
-            W.scroll[W.tab] = math.max(-maxS, math.min(W.scroll[W.tab], 0))
-        else
-            W.scroll[W.tab] = 0
-        end
-        return
-    end
-    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-    local mousePos = UserInputService:GetMouseLocation()
-    local mx, my = mousePos.X, mousePos.Y
-    if not W.show then
-        if mx >= tglRect.x and mx <= tglRect.x + tglRect.w and my >= tglRect.y and my <= tglRect.y + tglRect.h then
-            W.show = true
-        end
-        return
-    end
-    if mx >= W.x + W.w - 28 and mx <= W.x + W.w - 8 and my >= W.y + 8 and my <= W.y + 30 then
-        W.show = false
-        return
-    end
-    for _, btn in ipairs(tabBtns) do
-        local by = W.y + 40 + (btn.idx - 1) * 40 + 8
-        if mx >= W.x + 5 and mx <= W.x + 165 and my >= by and my <= by + 36 then
-            W.tab = btn.name
-            return
-        end
-    end
-    if my >= W.y and my <= W.y + 40 then
-        W.dragging = true
-        W.dragStart = Vector2.new(mx, my)
-        W.dragWinPos = Vector2.new(W.x, W.y)
-        return
-    end
-    local scroll = W.scroll[W.tab] or 0
-    local cwx = W.x + 175
-    local cwy = W.y + 45 + scroll
-    for _, idx in ipairs(controlsByTab[W.tab]) do
-        local ctrl = controls[idx]
-        if ctrl.hitTest(ctrl, mx, my, cwx, cwy) then
-            if ctrl.type == "slider" then
-                ctrl.beginDrag(ctrl, mx, my, cwx, cwy)
-                activeSlider = ctrl
-            else
-                ctrl.click(ctrl)
-            end
-            return
-        end
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
-    local mousePos = UserInputService:GetMouseLocation()
-    local mx, my = mousePos.X, mousePos.Y
-    if W.dragging then
-        W.x = W.dragWinPos.X + (mx - W.dragStart.X)
-        W.y = W.dragWinPos.Y + (my - W.dragStart.Y)
-        return
-    end
-    if activeSlider then
-        local scroll = W.scroll[W.tab] or 0
-        activeSlider.drag(activeSlider, mx, my, W.x + 175, W.y + 45 + scroll)
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        W.dragging = false
-        activeSlider = nil
-    end
-end)
-
--- Spectator List (Drawing-based)
-local specLabels = {}
-local specBg = NewFill(Color3.fromRGB(25, 25, 35), 0)
-specBg.Visible = false
-local specTitle = Drawing.new("Text")
-specTitle.Visible = false
-specTitle.Font = 3
-specTitle.Size = 11
-specTitle.Center = false
-specTitle.Color = UI.Accent
-specTitle.ZIndex = 10
-specTitle.Text = "Spectators"
-
-local function UpdateSpectatorList()
-    local cam = workspace.CurrentCamera
-    if not S.Misc.SpectatorList or not cam or not cam.ViewportSize or cam.ViewportSize.X == 0 then
-        specBg.Visible = false
-        specTitle.Visible = false
-        for _, lbl in pairs(specLabels) do
-            lbl.Visible = false
-        end
-        return
-    end
-    local vs = cam.ViewportSize
-    local bx = vs.X - 190
-    local by = vs.Y / 2
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChild("Humanoid")
-    local specs = {}
-    if hum then
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.CameraSubject == hum then
-                table.insert(specs, player.Name)
-            end
-        end
-    end
-    for name, lbl in pairs(specLabels) do
-        if not tableFind(specs, name) then
-            lbl:Remove()
-            specLabels[name] = nil
-        end
-    end
-    local count = #specs
-    local height = math.max(24, 24 + count * 18)
-    specBg.Visible = true
-    specBg:set(bx, by, 180, height)
-    specTitle.Visible = true
-    specTitle.Position = Vector2.new(bx + 5, by + 2)
-    for i, name in ipairs(specs) do
-        if not specLabels[name] then
-            local lbl = Drawing.new("Text")
-            lbl.Visible = false
-            lbl.Font = 3
-            lbl.Size = 11
-            lbl.Center = false
-            lbl.Color = UI.Text
-            lbl.ZIndex = 10
-            specLabels[name] = lbl
-        end
-        specLabels[name].Visible = true
-        specLabels[name].Text = name
-        specLabels[name].Position = Vector2.new(bx + 5, by + 24 + (i - 1) * 18)
-    end
-end
-
--- ESP System
-local ESPObjects = {}
-local ChamsObjects = {}
-local _chamsComplete = false
-
-local function CreateESP(player)
-    if player == LocalPlayer then return end
-    local boxLines = {}
-    for i = 1, 4 do
-        local l = Drawing.new("Line")
-        l.Visible = false
-        l.Thickness = 2
-        l.Color = Color3.new(1, 1, 1)
-        l.Transparency = 0
-        table.insert(boxLines, l)
-    end
-    local objs = {
-        Box = boxLines,
-        Name = Drawing.new("Text"),
-        Role = Drawing.new("Text"),
-        Tracer = Drawing.new("Line")
-    }
-    objs.Name.Visible = false
-    objs.Name.Size = 14
-    objs.Name.Center = true
-    objs.Name.Font = 2
-    objs.Role.Visible = false
-    objs.Role.Size = 13
-    objs.Role.Center = true
-    objs.Role.Font = 2
-    objs.Tracer.Visible = false
-    objs.Tracer.Thickness = 1.5
-    objs.Tracer.Transparency = 0.6
-    ESPObjects[player] = objs
-end
-
--- Chams
-local function CreateChams(player)
-    if player == LocalPlayer or ChamsObjects[player] then return end
-    local hl = Instance.new("Highlight")
-    hl.FillTransparency = 0.5
-    hl.OutlineTransparency = 0
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Parent = game:GetService("CoreGui")
-    ChamsObjects[player] = hl
-    local function update()
-        if player.Character then
-            hl.Adornee = player.Character
-            hl.FillColor = RoleColors[GetPlayerRole(player)]
-            hl.OutlineColor = Color3.new(1, 1, 1)
-        end
-    end
-    update()
-    player.CharacterAdded:Connect(update)
-end
-
-Players.PlayerAdded:Connect(function(player)
-    if player ~= LocalPlayer then
-        player.CharacterAdded:Connect(function()
-            if S.ESP.Chams then
-                CreateChams(player)
-            end
-        end)
-    end
-end)
-
--- Gun ESP
-local GunDropNames = {"GunDrop", "Gun_Drop", "Gun_Giver", "Giver"}
-local function IsGunDrop(obj)
-    for _, name in ipairs(GunDropNames) do
-        if obj.Name == name then return true end
-    end
-    if obj:IsA("Tool") then
-        if obj:FindFirstChild("Handle") then return true end
-        if obj:FindFirstChild("Gun") or obj:FindFirstChild("Shoot") or obj:FindFirstChild("Fire") then return true end
-    end
-    if obj:IsA("Part") or obj:IsA("MeshPart") then
-        if obj.Name:lower():find("gun") then return true end
-    end
-    return false
-end
-
-local GunESPObjects = {}
-
-local function UpdateGunESP()
-    if not S.MM2.GunESP then
-        for _, text in pairs(GunESPObjects) do
-            pcall(function() text:Remove() end)
-        end
-        GunESPObjects = {}
-        return
-    end
-    local seen = {}
-    local function scan(container)
-        for _, obj in ipairs(container:GetChildren()) do
-            if IsGunDrop(obj) then
-                local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart") or obj
-                local part = handle:IsA("BasePart") and handle or nil
-                if part then
-                    seen[obj] = part
-                    if not GunESPObjects[obj] then
-                        local text = Drawing.new("Text")
-                        text.Text = "GUN"
-                        text.Size = 16
-                        text.Color = Color3.fromRGB(255, 215, 0)
-                        text.Center = true
-                        text.Font = 2
-                        GunESPObjects[obj] = text
-                    end
-                end
-            end
-            if obj:IsA("Model") or obj:IsA("Folder") then
-                scan(obj)
-            end
-        end
-    end
-    scan(workspace)
-    for obj, text in pairs(GunESPObjects) do
-        if not seen[obj] then
-            pcall(function() text:Remove() end)
-            GunESPObjects[obj] = nil
-        end
-    end
-end
-
+----------------------------------------------------------------------
 -- Aimbot
+----------------------------------------------------------------------
+local setAimStatus = function() end -- assigned once the UI exists
+
 local lastShot = 0
-local FIRE_INTERVAL = 0.1 -- seconds between shots while the key is held / auto-shooting
+local FIRE_INTERVAL = 0.1
 local aimbotActive = false
 local aimbotKeyHeld = false
 local aimbotKeyCode = nil
-local FOVCircle
-
-local function InitFOVCircle()
-    if FOVCircle then return end
-    FOVCircle = Drawing.new("Circle")
-    FOVCircle.Visible = false
-    FOVCircle.Thickness = 1.5
-    FOVCircle.Filled = false
-    FOVCircle.NumSides = 64
-    FOVCircle.Transparency = 0.7
-end
-
-local function UpdateFOVCircle()
-    if not S.Aimbot.FOVCircle then
-        if FOVCircle then FOVCircle.Visible = false end
-        return
-    end
-    InitFOVCircle()
-    FOVCircle.Position = UserInputService:GetMouseLocation()
-    FOVCircle.Radius = S.Aimbot.FOVRadius
-    local color = S.Visuals.RainbowMode and UI.Accent or ParseFOVColor() or Color3.fromRGB(200, 100, 255)
-    FOVCircle.Color = aimbotActive and Color3.fromRGB(100, 200, 255) or color
-    FOVCircle.Visible = true
-end
 
 local function GetMurderer()
-    -- Prefer role detection (cached) so we never miss a re-skinned knife
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
-            if GetPlayerRole(player) == "Murderer" then
-                return player
-            end
+            if GetPlayerRole(player) == "Murderer" then return player end
         end
     end
-    -- Fallback: direct knife scan in character / backpack
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
             local char = player.Character
             if char and char:FindFirstChild("Knife") then
-                RoleCache[player] = "Murderer"
-                return player
+                RoleCache[player] = "Murderer"; return player
             end
             local bp = player:FindFirstChild("Backpack")
             if bp and bp:FindFirstChild("Knife") then
-                RoleCache[player] = "Murderer"
-                return player
+                RoleCache[player] = "Murderer"; return player
             end
         end
     end
@@ -1148,27 +160,19 @@ local function FindGunRemote(gun)
     end
     if not remote then
         for _, child in ipairs(gun:GetDescendants()) do
-            if child:IsA("RemoteEvent") then
-                remote = child
-                break
-            end
+            if child:IsA("RemoteEvent") then remote = child; break end
         end
     end
-    if remote and not remote:IsA("RemoteEvent") then
-        remote = nil
-    end
+    if remote and not remote:IsA("RemoteEvent") then remote = nil end
     RemoteCache[gun] = remote
     return remote
 end
 
-local function InvalidateRemoteCache(gun)
-    RemoteCache[gun] = nil
-end
+local function InvalidateRemoteCache(gun) RemoteCache[gun] = nil end
 
 local function GetAimPart(character)
     if not character then return nil end
-    local partName = S.Aimbot.AimPart
-    local part = character:FindFirstChild(partName)
+    local part = character:FindFirstChild(S.Aimbot.AimPart)
     if part then return part end
     return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
 end
@@ -1185,7 +189,6 @@ end
 local function FindGun()
     local char = LocalPlayer.Character
     if not char then return nil end
-
     local function isGunTool(tool)
         if not tool:IsA("Tool") then return false end
         if tool:FindFirstChild("Shoot") or tool:FindFirstChild("Fire") then return true end
@@ -1197,7 +200,6 @@ local function FindGun()
         end
         return false
     end
-
     for _, name in ipairs(GunToolNames) do
         local g = char:FindFirstChild(name)
         if g and isGunTool(g) then return g end
@@ -1223,14 +225,9 @@ local function EquipGun(gun)
     if not gun then return nil end
     local char = LocalPlayer.Character
     if not char then return nil end
-    -- Already in hand? Don't re-equip — avoids flicker and keeps it smooth.
-    if gun.Parent == char then return gun end
+    if gun.Parent == char then return gun end -- already in hand, don't re-equip
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        -- EquipTool reparents the tool into the character; its child remote
-        -- comes along, so we can fire immediately without yielding a frame.
-        pcall(function() hum:EquipTool(gun) end)
-    end
+    if hum then pcall(function() hum:EquipTool(gun) end) end
     return gun
 end
 
@@ -1250,7 +247,6 @@ local function ShootMurderer(murderer, gun)
     local targetPos = PredictPosition(part)
     local remote = FindGunRemote(gun)
     if not remote then
-        -- Gun tool had no remote we recognise; sweep other equipped tools.
         local char = LocalPlayer.Character
         if char then
             for _, child in ipairs(char:GetChildren()) do
@@ -1263,7 +259,6 @@ local function ShootMurderer(murderer, gun)
         end
     end
     if not remote then return false end
-    -- Different MM2 gun versions expect different arguments; try both.
     local ok = pcall(function() remote:FireServer(targetPos, part) end)
     if not ok then
         pcall(function() remote:FireServer(targetPos) end)
@@ -1273,222 +268,60 @@ end
 
 local function ExecuteAimbot()
     if not S.Aimbot.Enabled then aimbotActive = false; return end
-
-    -- 1. No gun? Stop here and reset — you can't shoot without one.
     local gun = FindGun()
     if not gun then
         aimbotActive = false
+        setAimStatus("no gun in your inventory", Color3.fromRGB(255, 120, 120))
         return
     end
-
-    -- 2. Find the murderer.
     local murderer = GetMurderer()
     if not murderer or not murderer.Character then
         aimbotActive = false
+        setAimStatus("no murderer found yet", Color3.fromRGB(255, 185, 90))
         return
     end
-
-    -- 3. Off-screen aim shoots wherever the murderer is. When it's off, only
-    --    fire while they're actually on screen.
     if not S.Aimbot.OffScreen then
         local part = GetAimPart(murderer.Character)
         if part then
             local _, onScreen = Camera:WorldToViewportPoint(part.Position)
-            if not onScreen then aimbotActive = false; return end
+            if not onScreen then
+                aimbotActive = false
+                setAimStatus("murderer off-screen (enable Off-Screen Aim)", Color3.fromRGB(255, 185, 90))
+                return
+            end
         end
     end
-
-    -- 4. Equip (if needed) and shoot.
     aimbotActive = true
     local fired = ShootMurderer(murderer, gun)
-
-    -- 5. Bonus: unequip after shooting, only if the user asked for it. When
-    --    off we never touch the equip state, so an already-equipped gun stays.
-    if fired and S.Aimbot.AutoUnequip then
-        UnequipGun()
+    if fired then
+        setAimStatus("fired at " .. murderer.Name, Color3.fromRGB(120, 230, 150))
+    else
+        setAimStatus("found gun + murderer, but no fire remote on the gun", Color3.fromRGB(255, 120, 120))
     end
+    if fired and S.Aimbot.AutoUnequip then UnequipGun() end
 end
 
-local function StopAimbot()
-    aimbotActive = false
-end
+local function StopAimbot() aimbotActive = false end
 
--- Auto-Collect (Teleport)
-local AutoCollectThrottle = 0
-
-local function DoAutoCollect()
-    local now = tick()
-    if now - AutoCollectThrottle < 0.3 then return end
-    AutoCollectThrottle = now
-
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local nearestGun = nil
-    local nearestPart = nil
-    local nearestDist = math.huge
-
-    local function scan(container)
-        for _, obj in ipairs(container:GetChildren()) do
-            if IsGunDrop(obj) then
-                local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart")
-                if handle then
-                    local dist = (handle.Position - hrp.Position).Magnitude
-                    if dist < nearestDist then
-                        nearestDist = dist
-                        nearestGun = obj
-                        nearestPart = handle
-                    end
-                end
-            end
-            if obj:IsA("Model") or obj:IsA("Folder") then
-                scan(obj)
-            end
-        end
-    end
-    scan(workspace)
-
-    if HasSheriffGun(char) and nearestDist <= 3 then return end
-
-    if nearestGun and nearestPart then
-        local targetPos = nearestPart.Position + Vector3.new(0, 3, 0)
-        if nearestDist > 5 then
-            hrp.CFrame = CFrame.new(targetPos)
-        end
-        if nearestDist <= 20 then
-            local gun = FindGun()
-            if gun then
-                local hum = char:FindFirstChild("Humanoid")
-                if hum then
-                    pcall(function() hum:EquipTool(gun) end)
-                end
-            end
-        end
-    end
-end
-
--- Crosshair
-local CrosshairDrawings = {}
-
-local function RebuildCrosshair()
-    for _, d in pairs(CrosshairDrawings) do
-        if d.Remove then d:Remove() end
-    end
-    CrosshairDrawings = {}
-
-    if not S.Crosshair.Enabled then return end
-
-    local size = S.Crosshair.Size
-    local thick = S.Crosshair.Thickness
-    local color = S.Visuals.RainbowMode and UI.Accent or Color3.new(1, 1, 1)
-
-    if S.Crosshair.Style == "Cross" then
-        local h = Drawing.new("Line")
-        h.From = Vector2.new(0, 0)
-        h.To = Vector2.new(0, 0)
-        h.Color = color
-        h.Thickness = thick
-        h.Transparency = 0.8
-        h.Visible = true
-        table.insert(CrosshairDrawings, h)
-
-        local v = Drawing.new("Line")
-        v.From = Vector2.new(0, 0)
-        v.To = Vector2.new(0, 0)
-        v.Color = color
-        v.Thickness = thick
-        v.Transparency = 0.8
-        v.Visible = true
-        table.insert(CrosshairDrawings, v)
-    elseif S.Crosshair.Style == "Dot" then
-        local d = Drawing.new("Circle")
-        d.Radius = math.max(thick, 2)
-        d.Color = color
-        d.Thickness = thick
-        d.Filled = true
-        d.Transparency = 0.7
-        d.Visible = true
-        table.insert(CrosshairDrawings, d)
-    elseif S.Crosshair.Style == "Circle" then
-        local c = Drawing.new("Circle")
-        c.Radius = size
-        c.Color = color
-        c.Thickness = thick
-        c.Filled = false
-        c.Transparency = 0.6
-        c.Visible = true
-        table.insert(CrosshairDrawings, c)
-    end
-end
-
-local function UpdateCrosshair()
-    local pos = UserInputService:GetMouseLocation()
-    local size = S.Crosshair.Size
-    local thick = S.Crosshair.Thickness
-    local color = S.Visuals.RainbowMode and UI.Accent or Color3.new(1, 1, 1)
-
-    if S.Crosshair.Style == "Cross" then
-        if #CrosshairDrawings >= 2 then
-            CrosshairDrawings[1].From = Vector2.new(pos.X - size, pos.Y)
-            CrosshairDrawings[1].To = Vector2.new(pos.X + size, pos.Y)
-            CrosshairDrawings[1].Color = color
-            CrosshairDrawings[1].Thickness = thick
-            CrosshairDrawings[2].From = Vector2.new(pos.X, pos.Y - size)
-            CrosshairDrawings[2].To = Vector2.new(pos.X, pos.Y + size)
-            CrosshairDrawings[2].Color = color
-            CrosshairDrawings[2].Thickness = thick
-        end
-    elseif S.Crosshair.Style == "Dot" then
-        if #CrosshairDrawings >= 1 then
-            CrosshairDrawings[1].Position = pos
-            CrosshairDrawings[1].Radius = math.max(thick, 2)
-            CrosshairDrawings[1].Color = color
-        end
-    elseif S.Crosshair.Style == "Circle" then
-        if #CrosshairDrawings >= 1 then
-            CrosshairDrawings[1].Position = pos
-            CrosshairDrawings[1].Radius = size
-            CrosshairDrawings[1].Color = color
-            CrosshairDrawings[1].Thickness = thick
-        end
-    end
-end
-
-local RainbowHue = 0
-
--- Movement
+----------------------------------------------------------------------
+-- Movement / Noclip
+----------------------------------------------------------------------
 local function ApplyMovementSettings(char)
     char = char or LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChild("Humanoid")
     if not hum then return end
-    if S.Movement.SpeedEnabled then
-        hum.WalkSpeed = S.Movement.SpeedValue
-    else
-        hum.WalkSpeed = 16
-    end
-    if S.Movement.JumpEnabled then
-        hum.JumpPower = S.Movement.JumpValue
-    else
-        hum.JumpPower = 50
-    end
+    hum.WalkSpeed = S.Movement.SpeedEnabled and S.Movement.SpeedValue or 16
+    hum.JumpPower = S.Movement.JumpEnabled and S.Movement.JumpValue or 50
 end
 
-local function OnLocalCharacterAdded(char)
+LocalPlayer.CharacterAdded:Connect(function(char)
     task.wait(0.5)
     ApplyMovementSettings(char)
-end
+end)
+if LocalPlayer.Character then ApplyMovementSettings() end
 
-LocalPlayer.CharacterAdded:Connect(OnLocalCharacterAdded)
-if LocalPlayer.Character then
-    ApplyMovementSettings()
-end
-
--- Noclip
 local NoclipConnection = nil
-
 local function EnableNoclip()
     if NoclipConnection then NoclipConnection:Disconnect() end
     NoclipConnection = RunService.Stepped:Connect(function()
@@ -1500,33 +333,421 @@ local function EnableNoclip()
         end
     end)
 end
-
 local function DisableNoclip()
     if NoclipConnection then NoclipConnection:Disconnect(); NoclipConnection = nil end
 end
-
 local function ToggleNoclip()
-    if S.MM2.Noclip then
-        S.MM2.Noclip = false
-        DisableNoclip()
-    else
-        S.MM2.Noclip = true
-        EnableNoclip()
+    S.MM2.Noclip = not S.MM2.Noclip
+    if S.MM2.Noclip then EnableNoclip() else DisableNoclip() end
+end
+
+----------------------------------------------------------------------
+-- Auto Collect (teleport to dropped gun)
+----------------------------------------------------------------------
+local GunDropNames = {"GunDrop", "Gun_Drop", "Gun_Giver", "Giver"}
+local function IsGunDrop(obj)
+    for _, name in ipairs(GunDropNames) do
+        if obj.Name == name then return true end
+    end
+    if obj:IsA("Tool") then
+        if obj:FindFirstChild("Handle") then return true end
+        if obj:FindFirstChild("Gun") or obj:FindFirstChild("Shoot") or obj:FindFirstChild("Fire") then return true end
+    end
+    if obj:IsA("Part") or obj:IsA("MeshPart") then
+        if obj.Name:lower():find("gun") then return true end
+    end
+    return false
+end
+
+local AutoCollectThrottle = 0
+local function DoAutoCollect()
+    local now = tick()
+    if now - AutoCollectThrottle < 0.3 then return end
+    AutoCollectThrottle = now
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local nearestGun, nearestPart, nearestDist = nil, nil, math.huge
+    local function scan(container)
+        for _, obj in ipairs(container:GetChildren()) do
+            if IsGunDrop(obj) then
+                local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart")
+                if handle then
+                    local dist = (handle.Position - hrp.Position).Magnitude
+                    if dist < nearestDist then
+                        nearestDist = dist; nearestGun = obj; nearestPart = handle
+                    end
+                end
+            end
+            if obj:IsA("Model") or obj:IsA("Folder") then scan(obj) end
+        end
+    end
+    scan(workspace)
+
+    if HasSheriffGun(char) and nearestDist <= 3 then return end
+    if nearestGun and nearestPart then
+        local targetPos = nearestPart.Position + Vector3.new(0, 3, 0)
+        if nearestDist > 5 then hrp.CFrame = CFrame.new(targetPos) end
+        if nearestDist <= 20 then
+            local gun = FindGun()
+            if gun then
+                local hum = char:FindFirstChild("Humanoid")
+                if hum then pcall(function() hum:EquipTool(gun) end) end
+            end
+        end
     end
 end
 
+----------------------------------------------------------------------
+-- In-world ESP (Drawing text/lines + Highlight chams)
+----------------------------------------------------------------------
+local ESPObjects = {}
+local ChamsObjects = {}
+local _chamsComplete = false
+
+local function CreateESP(player)
+    if player == LocalPlayer or not hasDrawing then return end
+    local boxLines = {}
+    for i = 1, 4 do
+        local l = Drawing.new("Line")
+        l.Visible = false; l.Thickness = 2; l.Color = Color3.new(1, 1, 1); l.Transparency = 0
+        table.insert(boxLines, l)
+    end
+    local objs = {
+        Box = boxLines,
+        Name = Drawing.new("Text"),
+        Role = Drawing.new("Text"),
+        Tracer = Drawing.new("Line")
+    }
+    objs.Name.Visible = false; objs.Name.Size = 14; objs.Name.Center = true; objs.Name.Font = 2
+    objs.Role.Visible = false; objs.Role.Size = 13; objs.Role.Center = true; objs.Role.Font = 2
+    objs.Tracer.Visible = false; objs.Tracer.Thickness = 1.5; objs.Tracer.Transparency = 0.6
+    ESPObjects[player] = objs
+end
+
+local function CreateChams(player)
+    if player == LocalPlayer or ChamsObjects[player] then return end
+    local hl = Instance.new("Highlight")
+    hl.FillTransparency = 0.5
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = game:GetService("CoreGui")
+    ChamsObjects[player] = hl
+    local function update()
+        if player.Character then
+            hl.Adornee = player.Character
+            hl.FillColor = RoleColors[GetPlayerRole(player)]
+            hl.OutlineColor = Color3.new(1, 1, 1)
+        end
+    end
+    update()
+    player.CharacterAdded:Connect(update)
+end
+
+Players.PlayerAdded:Connect(function(player)
+    if player ~= LocalPlayer then
+        player.CharacterAdded:Connect(function()
+            if S.ESP.Chams then CreateChams(player) end
+        end)
+    end
+end)
+
+----------------------------------------------------------------------
+-- Gun ESP (yellow in-world label on dropped guns)
+----------------------------------------------------------------------
+local GunESPObjects = {}
+local function UpdateGunESP()
+    if not S.MM2.GunESP or not hasDrawing then
+        for _, text in pairs(GunESPObjects) do pcall(function() text:Remove() end) end
+        GunESPObjects = {}
+        return
+    end
+    local seen = {}
+    local function scan(container)
+        for _, obj in ipairs(container:GetChildren()) do
+            if IsGunDrop(obj) then
+                local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart") or obj
+                local part = handle:IsA("BasePart") and handle or nil
+                if part then
+                    seen[obj] = part
+                    if not GunESPObjects[obj] then
+                        local text = Drawing.new("Text")
+                        text.Text = "GUN"
+                        text.Size = 16
+                        text.Color = Color3.fromRGB(255, 215, 0) -- yellow
+                        text.Center = true
+                        text.Font = 2
+                        GunESPObjects[obj] = text
+                    end
+                end
+            end
+            if obj:IsA("Model") or obj:IsA("Folder") then scan(obj) end
+        end
+    end
+    scan(workspace)
+    for obj, text in pairs(GunESPObjects) do
+        if not seen[obj] then
+            pcall(function() text:Remove() end)
+            GunESPObjects[obj] = nil
+        end
+    end
+end
+
+----------------------------------------------------------------------
+-- Native UI (ScreenGui — renders correctly on Xeno)
+----------------------------------------------------------------------
+local COL = {
+    Bg = Color3.fromRGB(22, 23, 31), Header = Color3.fromRGB(29, 31, 42), Sidebar = Color3.fromRGB(25, 27, 37),
+    Card = Color3.fromRGB(34, 36, 49), CardHover = Color3.fromRGB(45, 48, 66),
+    Accent = Color3.fromRGB(124, 152, 255), AccentDim = Color3.fromRGB(66, 84, 160),
+    Text = Color3.fromRGB(237, 239, 247), TextDim = Color3.fromRGB(142, 146, 167),
+    Stroke = Color3.fromRGB(48, 51, 71), On = Color3.fromRGB(86, 214, 140), OffTrack = Color3.fromRGB(58, 61, 82)
+}
+
+local function mk(class, props, children)
+    local o = Instance.new(class)
+    if props then for k, v in pairs(props) do o[k] = v end end
+    if children then for _, c in ipairs(children) do c.Parent = o end end
+    return o
+end
+local function uicorner(r) return mk("UICorner", { CornerRadius = UDim.new(0, r or 8) }) end
+local function uistroke(c, t) return mk("UIStroke", { Color = c or COL.Stroke, Thickness = t or 1 }) end
+
+local guiParent
+do
+    local ok, hui = pcall(function() return gethui and gethui() end)
+    if ok and hui then
+        guiParent = hui
+    else
+        local ok2, cg = pcall(function() return game:GetService("CoreGui") end)
+        guiParent = (ok2 and cg) or LocalPlayer:WaitForChild("PlayerGui")
+    end
+end
+pcall(function()
+    local old = guiParent:FindFirstChild("KittyHubUI")
+    if old then old:Destroy() end
+end)
+
+local Gui = mk("ScreenGui", {
+    Name = "KittyHubUI", ResetOnSpawn = false, IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999, Parent = guiParent
+})
+
+local Window = mk("Frame", {
+    Name = "Window", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(560, 420), BackgroundColor3 = COL.Bg, BorderSizePixel = 0, Active = true, Visible = true, Parent = Gui
+}, { uicorner(10), uistroke(COL.Stroke, 1) })
+
+local Header = mk("Frame", { Name = "Header", Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = COL.Header, BorderSizePixel = 0, Parent = Window }, { uicorner(10) })
+mk("Frame", { Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14), BackgroundColor3 = COL.Header, BorderSizePixel = 0, Parent = Header })
+mk("Frame", { Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, 0), BackgroundColor3 = COL.Accent, BorderSizePixel = 0, Parent = Header })
+mk("TextLabel", { BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 0), Size = UDim2.new(0, 160, 1, 0),
+    Font = Enum.Font.GothamBold, Text = "Kitty Hub", TextSize = 18, TextColor3 = COL.Accent, TextXAlignment = Enum.TextXAlignment.Left, Parent = Header })
+mk("TextLabel", { BackgroundColor3 = COL.Accent, Position = UDim2.fromOffset(126, 14), Size = UDim2.fromOffset(42, 18),
+    Font = Enum.Font.GothamBold, Text = "MM2", TextSize = 11, TextColor3 = Color3.new(1, 1, 1), Parent = Header }, { uicorner(5) })
+
+local CloseBtn = mk("TextButton", { BackgroundTransparency = 1, Position = UDim2.new(1, -42, 0, 0), Size = UDim2.fromOffset(42, 44),
+    Font = Enum.Font.GothamBold, Text = "X", TextSize = 17, TextColor3 = COL.TextDim, AutoButtonColor = false, Parent = Header })
+CloseBtn.MouseEnter:Connect(function() CloseBtn.TextColor3 = Color3.fromRGB(255, 95, 95) end)
+CloseBtn.MouseLeave:Connect(function() CloseBtn.TextColor3 = COL.TextDim end)
+CloseBtn.MouseButton1Click:Connect(function() Window.Visible = false end)
+
+local Sidebar = mk("Frame", { Name = "Sidebar", Position = UDim2.fromOffset(0, 44), Size = UDim2.new(0, 138, 1, -44), BackgroundColor3 = COL.Sidebar, BorderSizePixel = 0, Parent = Window })
+mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center, Parent = Sidebar })
+mk("UIPadding", { PaddingTop = UDim.new(0, 10), Parent = Sidebar })
+
+local Content = mk("Frame", { Name = "Content", Position = UDim2.fromOffset(138, 44), Size = UDim2.new(1, -138, 1, -44), BackgroundTransparency = 1, Parent = Window })
+
+local pages, tabButtons = {}, {}
+local activeTabName = nil
+local function selectTab(name)
+    activeTabName = name
+    for n, pg in pairs(pages) do pg.Visible = (n == name) end
+    for n, btn in pairs(tabButtons) do
+        local active = (n == name)
+        TweenService:Create(btn, TweenInfo.new(0.15), { BackgroundTransparency = active and 0 or 1 }):Play()
+        btn.TextColor3 = active and Color3.new(1, 1, 1) or COL.TextDim
+    end
+end
+
+for i, name in ipairs({"ESP", "Aimbot", "MM2", "Movement"}) do
+    local btn = mk("TextButton", { Name = name, Size = UDim2.new(1, -14, 0, 34), BackgroundColor3 = COL.Accent, BackgroundTransparency = 1,
+        BorderSizePixel = 0, AutoButtonColor = false, Font = Enum.Font.GothamMedium, Text = name, TextSize = 14, TextColor3 = COL.TextDim, LayoutOrder = i, Parent = Sidebar }, { uicorner(7) })
+    tabButtons[name] = btn
+    local page = mk("ScrollingFrame", { Name = name, Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 3, ScrollBarImageColor3 = COL.Accent, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, Visible = false, Parent = Content })
+    mk("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = page })
+    mk("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), Parent = page })
+    pages[name] = page
+    btn.MouseButton1Click:Connect(function() selectTab(name) end)
+    btn.MouseEnter:Connect(function() if activeTabName ~= name then TweenService:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 0.82 }):Play() end end)
+    btn.MouseLeave:Connect(function() if activeTabName ~= name then TweenService:Create(btn, TweenInfo.new(0.12), { BackgroundTransparency = 1 }):Play() end end)
+end
+
+local function hoverify(frame)
+    frame.MouseEnter:Connect(function() TweenService:Create(frame, TweenInfo.new(0.12), { BackgroundColor3 = COL.CardHover }):Play() end)
+    frame.MouseLeave:Connect(function() TweenService:Create(frame, TweenInfo.new(0.12), { BackgroundColor3 = COL.Card }):Play() end)
+end
+
+local function Toggle(tab, label, ref, key, callback)
+    local row = mk("TextButton", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = COL.Card, BorderSizePixel = 0, AutoButtonColor = false, Text = "", Parent = pages[tab] }, { uicorner(8) })
+    mk("TextLabel", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -80, 1, 0),
+        Font = Enum.Font.GothamMedium, Text = label, TextSize = 14, TextColor3 = COL.Text, TextXAlignment = Enum.TextXAlignment.Left, Parent = row })
+    local track = mk("Frame", { Position = UDim2.new(1, -58, 0.5, -11), Size = UDim2.fromOffset(44, 22), BackgroundColor3 = COL.OffTrack, BorderSizePixel = 0, Parent = row }, { uicorner(11) })
+    local knob = mk("Frame", { Position = UDim2.fromOffset(3, 3), Size = UDim2.fromOffset(16, 16), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = track }, { uicorner(8) })
+    hoverify(row)
+    local function refresh(v, anim)
+        local ti = TweenInfo.new(anim and 0.15 or 0, Enum.EasingStyle.Quad)
+        TweenService:Create(track, ti, { BackgroundColor3 = v and COL.On or COL.OffTrack }):Play()
+        TweenService:Create(knob, ti, { Position = v and UDim2.new(1, -19, 0, 3) or UDim2.fromOffset(3, 3) }):Play()
+    end
+    refresh(ref[key] and true or false, false)
+    row.MouseButton1Click:Connect(function()
+        ref[key] = not ref[key]
+        refresh(ref[key] and true or false, true)
+        if callback then callback(ref[key]) end
+    end)
+end
+
+local function Slider(tab, label, ref, key, minV, maxV, callback)
+    local row = mk("Frame", { Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = COL.Card, BorderSizePixel = 0, Parent = pages[tab] }, { uicorner(8) })
+    hoverify(row)
+    mk("TextLabel", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -70, 0, 18),
+        Font = Enum.Font.GothamMedium, Text = label, TextSize = 14, TextColor3 = COL.Text, TextXAlignment = Enum.TextXAlignment.Left, Parent = row })
+    local valLbl = mk("TextLabel", { BackgroundTransparency = 1, Position = UDim2.new(1, -54, 0, 8), Size = UDim2.fromOffset(40, 18),
+        Font = Enum.Font.GothamBold, Text = "", TextSize = 14, TextColor3 = COL.Accent, TextXAlignment = Enum.TextXAlignment.Right, Parent = row })
+    local track = mk("Frame", { Position = UDim2.new(0, 14, 0, 36), Size = UDim2.new(1, -28, 0, 6), BackgroundColor3 = COL.OffTrack, BorderSizePixel = 0, Active = true, Parent = row }, { uicorner(3) })
+    local fill = mk("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = COL.Accent, BorderSizePixel = 0, Parent = track }, { uicorner(3) })
+    local knob = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.fromOffset(14, 14), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, Parent = track }, { uicorner(7) })
+    local function apply(a)
+        a = math.clamp(a, 0, 1)
+        local val = math.floor(minV + (maxV - minV) * a + 0.5)
+        ref[key] = val
+        fill.Size = UDim2.fromScale(a, 1)
+        knob.Position = UDim2.new(a, 0, 0.5, 0)
+        valLbl.Text = tostring(val)
+        if callback then callback(val) end
+    end
+    apply(((tonumber(ref[key]) or minV) - minV) / math.max(maxV - minV, 1))
+    local dragging = false
+    local function fromInput(input)
+        apply((input.Position.X - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1))
+    end
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true; fromInput(input) end
+    end)
+    track.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then fromInput(input) end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+end
+
+local function Dropdown(tab, label, ref, key, options, callback)
+    local row = mk("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = COL.Card, BorderSizePixel = 0, Parent = pages[tab] }, { uicorner(8) })
+    hoverify(row)
+    mk("TextLabel", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 0), Size = UDim2.new(1, -110, 1, 0),
+        Font = Enum.Font.GothamMedium, Text = label, TextSize = 14, TextColor3 = COL.Text, TextXAlignment = Enum.TextXAlignment.Left, Parent = row })
+    local btn = mk("TextButton", { Position = UDim2.new(1, -96, 0.5, -13), Size = UDim2.fromOffset(84, 26), BackgroundColor3 = COL.AccentDim,
+        BorderSizePixel = 0, AutoButtonColor = false, Font = Enum.Font.GothamBold, Text = tostring(ref[key]), TextSize = 13, TextColor3 = COL.Text, Parent = row }, { uicorner(6) })
+    local idx = 1
+    for i, o in ipairs(options) do if o == ref[key] then idx = i; break end end
+    btn.MouseEnter:Connect(function() TweenService:Create(btn, TweenInfo.new(0.12), { BackgroundColor3 = COL.Accent }):Play() end)
+    btn.MouseLeave:Connect(function() TweenService:Create(btn, TweenInfo.new(0.12), { BackgroundColor3 = COL.AccentDim }):Play() end)
+    btn.MouseButton1Click:Connect(function()
+        idx = (idx % #options) + 1
+        ref[key] = options[idx]
+        btn.Text = tostring(ref[key])
+        if callback then callback(ref[key]) end
+    end)
+end
+
+-- ESP tab
+Toggle("ESP", "Enabled", S.ESP, "Enabled")
+Toggle("ESP", "Names", S.ESP, "Names")
+Toggle("ESP", "Roles", S.ESP, "Roles")
+Toggle("ESP", "Chams", S.ESP, "Chams")
+Toggle("ESP", "Distance", S.ESP, "Distance")
+Toggle("ESP", "Gun ESP (yellow)", S.MM2, "GunESP")
+
+-- Aimbot tab
+Toggle("Aimbot", "Enabled", S.Aimbot, "Enabled")
+Toggle("Aimbot", "Auto Shoot", S.Aimbot, "AutoShoot")
+Toggle("Aimbot", "Prediction", S.Aimbot, "Prediction")
+Toggle("Aimbot", "Off-Screen Aim", S.Aimbot, "OffScreen")
+Toggle("Aimbot", "Auto Unequip", S.Aimbot, "AutoUnequip")
+Toggle("Aimbot", "Debug (show status)", S.Aimbot, "Debug")
+Dropdown("Aimbot", "Aimbot Key", S.Aimbot, "AimbotKey", {"C", "G", "V", "B", "X", "Z", "F", "T", "Q", "E", "R", "Y"})
+
+-- MM2 tab
+Toggle("MM2", "Noclip", S.MM2, "Noclip", function(v) if v then EnableNoclip() else DisableNoclip() end end)
+Toggle("MM2", "Auto Collect", S.MM2, "AutoCollect")
+Dropdown("MM2", "Noclip Key", S.MM2, "NoclipKey", {"N", "C", "G", "V", "B", "X", "Z", "F", "T", "Q", "E", "R", "Y"})
+
+-- Movement tab
+Toggle("Movement", "Speed Hack", S.Movement, "SpeedEnabled", function() ApplyMovementSettings() end)
+Slider("Movement", "Speed", S.Movement, "SpeedValue", 16, 100, function() ApplyMovementSettings() end)
+Toggle("Movement", "Jump Hack", S.Movement, "JumpEnabled", function() ApplyMovementSettings() end)
+Slider("Movement", "Jump Power", S.Movement, "JumpValue", 50, 200, function() ApplyMovementSettings() end)
+
+selectTab("ESP")
+
+-- Floating launcher button
+local Launcher = mk("TextButton", { Name = "Launcher", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 18, 1, -18),
+    Size = UDim2.fromOffset(50, 50), BackgroundColor3 = COL.Accent, BorderSizePixel = 0, AutoButtonColor = false,
+    Font = Enum.Font.GothamBold, Text = "K", TextSize = 22, TextColor3 = Color3.new(1, 1, 1), Parent = Gui }, { uicorner(25), uistroke(Color3.new(1, 1, 1), 1) })
+Launcher.MouseButton1Click:Connect(function() Window.Visible = not Window.Visible end)
+
+-- Aimbot status toast (only shows when Aimbot > Debug is on)
+local AimStatus = mk("TextLabel", { Name = "AimStatus", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -76),
+    Size = UDim2.fromOffset(380, 28), BackgroundColor3 = Color3.fromRGB(20, 21, 28), BackgroundTransparency = 0.1, BorderSizePixel = 0,
+    Font = Enum.Font.GothamMedium, Text = "", TextSize = 14, TextColor3 = COL.Text, Visible = false, Parent = Gui }, { uicorner(8), uistroke(COL.Stroke, 1) })
+local aimStatusToken = 0
+setAimStatus = function(msg, color)
+    if not S.Aimbot.Debug then AimStatus.Visible = false; return end
+    AimStatus.Text = "Aimbot: " .. msg
+    AimStatus.TextColor3 = color or COL.Text
+    AimStatus.Visible = true
+    aimStatusToken = aimStatusToken + 1
+    local my = aimStatusToken
+    task.delay(1.4, function() if my == aimStatusToken then AimStatus.Visible = false end end)
+end
+
+-- Draggable window (via header)
+do
+    local dragging, dragStart, startPos
+    Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; dragStart = input.Position; startPos = Window.Position
+        end
+    end)
+    Header.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            Window.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+
+----------------------------------------------------------------------
 -- Keybinds
-UserInputService.InputBegan:Connect(function(input, processed)
+----------------------------------------------------------------------
+UserInputService.InputBegan:Connect(function(input)
     if input.KeyCode == Enum.KeyCode.X then
-        W.show = not W.show
+        Window.Visible = not Window.Visible
     end
-    local noclipKey = S.MM2.NoclipKey or "N"
-    local nk = Enum.KeyCode[noclipKey]
-    if nk and input.KeyCode == nk then
-        ToggleNoclip()
-    end
-    local key = S.Aimbot.AimbotKey
-    local keyCode = Enum.KeyCode[key]
+    local nk = Enum.KeyCode[S.MM2.NoclipKey or "N"]
+    if nk and input.KeyCode == nk then ToggleNoclip() end
+    local keyCode = Enum.KeyCode[S.Aimbot.AimbotKey]
     if keyCode and input.KeyCode == keyCode and S.Aimbot.Enabled then
         aimbotKeyCode = keyCode
         aimbotKeyHeld = true
@@ -1541,25 +762,17 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
-local lastCrosshairStyle = S.Crosshair.Style
+----------------------------------------------------------------------
+-- Main loop
+----------------------------------------------------------------------
 local lastCacheClear = 0
-
--- Main Loop
 RunService.RenderStepped:Connect(function()
     Camera = workspace.CurrentCamera or Camera
-    RenderGUI()
 
     local now = tick()
     if now - lastCacheClear > 2 then
         RoleCache = {}
         lastCacheClear = now
-    end
-
-    if S.Visuals.RainbowMode then
-        RainbowHue = (now * S.Visuals.RainbowSpeed * 0.15) % 1
-        UI.Accent = Color3.fromHSV(RainbowHue, 0.85, 1)
-    else
-        UI.Accent = Color3.fromRGB(171, 130, 255)
     end
 
     if S.Movement.SpeedEnabled or S.Movement.JumpEnabled then
@@ -1575,9 +788,7 @@ RunService.RenderStepped:Connect(function()
                 local color = RoleColors[role]
                 local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
 
-                if S.ESP.MaxDistance and dist > S.ESP.MaxDistance then
-                    onScreen = false
-                end
+                if S.ESP.MaxDistance and dist > S.ESP.MaxDistance then onScreen = false end
 
                 if onScreen then
                     if S.ESP.Boxes then
@@ -1653,10 +864,7 @@ RunService.RenderStepped:Connect(function()
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer and not ChamsObjects[player] then
                     anyMissing = true
-                    local char = player.Character
-                    if char then
-                        CreateChams(player)
-                    end
+                    if player.Character then CreateChams(player) end
                 end
             end
             if not anyMissing then _chamsComplete = true end
@@ -1668,9 +876,7 @@ RunService.RenderStepped:Connect(function()
         if player and player.Character then
             if S.ESP.Chams then
                 hl.Enabled = true
-                if hl.Adornee ~= player.Character then
-                    hl.Adornee = player.Character
-                end
+                if hl.Adornee ~= player.Character then hl.Adornee = player.Character end
                 hl.FillColor = RoleColors[GetPlayerRole(player)]
             else
                 hl.Enabled = false
@@ -1695,17 +901,12 @@ RunService.RenderStepped:Connect(function()
             end
         end
     else
-        for _, text in pairs(GunESPObjects) do
-            text.Visible = false
-        end
+        for _, text in pairs(GunESPObjects) do text.Visible = false end
     end
 
-    if S.MM2.AutoCollect then
-        DoAutoCollect()
-    end
+    if S.MM2.AutoCollect then DoAutoCollect() end
 
-    local aimbotKeyName = S.Aimbot.AimbotKey
-    local aimbotKeyEnum = Enum.KeyCode[aimbotKeyName]
+    local aimbotKeyEnum = Enum.KeyCode[S.Aimbot.AimbotKey]
     if S.Aimbot.Enabled and aimbotKeyEnum and UserInputService:IsKeyDown(aimbotKeyEnum) then
         aimbotKeyCode = aimbotKeyEnum
         aimbotKeyHeld = true
@@ -1719,39 +920,21 @@ RunService.RenderStepped:Connect(function()
     else
         StopAimbot()
     end
-
-    UpdateFOVCircle()
-
-    if S.Crosshair.Enabled then
-        if #CrosshairDrawings == 0 or lastCrosshairStyle ~= S.Crosshair.Style then
-            lastCrosshairStyle = S.Crosshair.Style
-            RebuildCrosshair()
-        end
-        UpdateCrosshair()
-    else
-        for _, d in pairs(CrosshairDrawings) do
-            d.Visible = false
-        end
-    end
-
-    UpdateSpectatorList()
 end)
 
+----------------------------------------------------------------------
 -- Player tracking
+----------------------------------------------------------------------
 for _, player in ipairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then
         CreateESP(player)
         player.CharacterAdded:Connect(function() OnCharacterAdded(player) end)
-        if player.Character and S.ESP.Chams then
-            CreateChams(player)
-        end
+        if player.Character and S.ESP.Chams then CreateChams(player) end
     end
 end
 
 Players.PlayerAdded:Connect(function(player)
-    if player ~= LocalPlayer then
-        CreateESP(player)
-    end
+    if player ~= LocalPlayer then CreateESP(player) end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
@@ -1768,6 +951,5 @@ Players.PlayerRemoving:Connect(function(player)
     RoleCache[player] = nil
 end)
 
-print("Kitty Hub v6 (MM2) Loaded!")
-print("[X] = GUI | [" .. (S.MM2.NoclipKey or "N") .. "] = Noclip | [" .. S.Aimbot.AimbotKey .. "] = Auto Aim")
-print("Features: ESP | Tracers | AutoShoot | Prediction | Rainbow | Crosshair | SpectatorList | AutoCollect")
+print("Kitty Hub v7 (MM2) Loaded! Native UI.")
+print("[X] = toggle menu | [" .. (S.MM2.NoclipKey or "N") .. "] = Noclip | [" .. S.Aimbot.AimbotKey .. "] = Auto Aim")
