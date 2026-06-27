@@ -14,7 +14,14 @@ A roblox script mainly for the game Murder Mystery 2.
 ## Modules
 
 ### mm2.lua — Murder Mystery 2
-Full features: ESP (boxes, names, roles, chams, tracers, distance), auto aim & shoot, prediction, FOV circle, gun ESP, auto-collect (teleport), noclip, speed/jump hacks, rainbow mode, crosshair (dot/cross/circle), spectator list.
+Native Roblox UI (no Drawing API). Features:
+- **Aimbot** — locks onto the murderer and fires your sheriff gun (auto-equips it). Hold-key or auto-shoot, with off-screen aim.
+- **ESP** — boxes, names, roles, tracers, chams, distance (color-coded by role).
+- **Gun ESP** — marks dropped guns in **yellow**.
+- **Auto Collect** — teleports you onto the nearest dropped gun.
+- **Noclip** (keybind), **Speed/Jump** hacks.
+
+Open the menu with the **Kitty** button (bottom-left) or press **X**. Settings persist across re-runs via `getgenv().CatSettings`.
 
 ### generic.lua — Any Game
 Basic features: ESP (boxes, names, chams, tracers, distance), noclip, speed/jump hacks, fly (WASD + Space/Shift).
