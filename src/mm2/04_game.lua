@@ -1,0 +1,491 @@
+-- ============================================================================
+--  GAME — everything that knows what Murder Mystery 2 actually looks like
+--
+--  Verified against the live game's structure:
+--    roles   ReplicatedStorage.GetPlayerData:InvokeServer() -> {[name] = {Role=...}}
+--            ReplicatedStorage.Remotes.Gameplay.PlayerDataChanged (push)
+--    shoot   Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(1, pos, "AH2")
+--    stab    Character.Knife.Stab:FireServer("Down")
+--    throw   Character.Knife.Events.KnifeThrown:FireServer(fromCF, toCF)
+--    map     the workspace child owning both `CoinContainer` and `Spawns`
+--    gun     a BasePart named `GunDrop`, parented into the map when a sheriff dies
+-- ============================================================================
+
+local Game = {}
+KH.Game = Game
+
+do
+    local RS          = KH.Services.ReplicatedStorage
+    local Players     = KH.Services.Players
+    local U           = KH.U
+    local LocalPlayer = KH.LocalPlayer
+
+    Game.Data     = {}   -- [playerName] = {Role = ..., Killed = ..., Dead = ...}
+    Game.Murderer = nil  -- player name, or nil before roles are dealt
+    Game.Sheriff  = nil
+    Game.Hero     = nil
+
+    -- ------------------------------------------------------------- signals
+    local listeners = {}
+
+    function Game.on(event, fn)
+        listeners[event] = listeners[event] or {}
+        table.insert(listeners[event], fn)
+    end
+
+    local function emit(event, ...)
+        for _, fn in ipairs(listeners[event] or {}) do
+            KH.safe("event:" .. event, fn, ...)
+        end
+    end
+
+    -- ------------------------------------------------------------- remotes
+    -- MM2 has moved these around between updates, so resolve by recursive name
+    -- lookup rather than a hard path, and re-resolve if the cached instance
+    -- gets reparented out from under us.
+    local remoteCache = {}
+    local function findRemote(name)
+        local cached = remoteCache[name]
+        if cached and cached.Parent then return cached end
+        local ok, found = pcall(function() return RS:FindFirstChild(name, true) end)
+        if ok and found then
+            remoteCache[name] = found
+            return found
+        end
+        return nil
+    end
+
+    -- --------------------------------------------------------- role tracking
+    local function applyData(data)
+        if typeof(data) ~= "table" then return end
+        Game.Data = data
+
+        local murderer, sheriff, hero
+        for name, entry in pairs(data) do
+            if typeof(entry) == "table" then
+                local role = entry.Role
+                if role == "Murderer" then murderer = name
+                elseif role == "Sheriff" then sheriff = name
+                elseif role == "Hero" then hero = name end
+            end
+        end
+
+        local changed = (murderer ~= Game.Murderer)
+            or (sheriff ~= Game.Sheriff)
+            or (hero ~= Game.Hero)
+
+        Game.Murderer, Game.Sheriff, Game.Hero = murderer, sheriff, hero
+        if changed then emit("RoleChange", murderer, sheriff, hero) end
+    end
+    Game.applyData = applyData
+
+    function Game.refreshRoles()
+        local remote = findRemote("GetPlayerData")
+        if not remote then return false end
+        local ok, data = pcall(function() return remote:InvokeServer() end)
+        if ok and typeof(data) == "table" then
+            applyData(data)
+            return true
+        end
+        return false
+    end
+
+    -- The server pushes the whole table whenever anyone's state changes, which
+    -- is how roles are known the instant a round starts — well before the
+    -- murderer's knife is visible to anyone.
+    KH.spawn(function()
+        local gameplay = findRemote("PlayerDataChanged")
+        if gameplay and gameplay:IsA("RemoteEvent") then
+            KH.track(gameplay.OnClientEvent:Connect(applyData))
+        end
+        Game.refreshRoles()
+    end)
+
+    -- Poll as a safety net: the push event is the fast path, but if it is ever
+    -- renamed we still recover roles within a couple of seconds.
+    KH.loop(2, function()
+        if not Game.Murderer then Game.refreshRoles() end
+    end)
+
+    -- ------------------------------------------------- tool-based fallback
+    -- Works without any remote at all, and is the only way to spot a Hero the
+    -- moment they pick the dropped gun up. Cached briefly because ESP asks for
+    -- every player's role on every frame.
+    local toolCache, toolCacheAt = {}, 0
+
+    local function toolRole(player)
+        local char = U.charOf(player)
+        local backpack = player:FindFirstChildOfClass("Backpack")
+        if (char and char:FindFirstChild("Knife"))
+            or (backpack and backpack:FindFirstChild("Knife")) then
+            return "Murderer"
+        end
+        if (char and char:FindFirstChild("Gun"))
+            or (backpack and backpack:FindFirstChild("Gun")) then
+            return "Sheriff"
+        end
+        return nil
+    end
+
+    local function cachedToolRole(player)
+        local now = os.clock()
+        if now - toolCacheAt > 0.25 then
+            toolCache, toolCacheAt = {}, now
+        end
+        local hit = toolCache[player]
+        if hit == nil then
+            hit = toolRole(player) or false
+            toolCache[player] = hit
+        end
+        return hit or nil
+    end
+
+    function Game.roleOf(player)
+        if not player then return "Innocent" end
+        local entry = Game.Data[player.Name]
+        local role = entry and entry.Role or nil
+        local held = cachedToolRole(player)
+
+        if role == nil or role == "Innocent" then
+            if held == "Murderer" then
+                role = "Murderer"
+            elseif held == "Sheriff" then
+                -- An innocent holding a gun picked it up off a dead sheriff.
+                role = (role == "Innocent") and "Hero" or "Sheriff"
+            end
+        end
+        return role or "Innocent"
+    end
+
+    function Game.colorOf(player)
+        local role = Game.roleOf(player)
+        local S = KH.S
+        if role == "Murderer" then return S.ESP.ColorMurderer, role end
+        if role == "Sheriff"  then return S.ESP.ColorSheriff,  role end
+        if role == "Hero"     then return S.ESP.ColorHero,     role end
+        return S.ESP.ColorInnocent, role
+    end
+
+    function Game.isAlive(player)
+        local entry = Game.Data[player.Name]
+        if entry and (entry.Killed or entry.Dead) then return false end
+        return U.isAliveChar(player)
+    end
+
+    function Game.myRole() return Game.roleOf(LocalPlayer) end
+    function Game.amSheriff()
+        local role = Game.myRole()
+        return role == "Sheriff" or role == "Hero"
+    end
+    function Game.amMurderer() return Game.myRole() == "Murderer" end
+
+    -- Resolve names to live Player objects, skipping the dead.
+    local function playerByName(name, requireAlive)
+        if not name then return nil end
+        local player = Players:FindFirstChild(name)
+        if not player then return nil end
+        if requireAlive and not Game.isAlive(player) then return nil end
+        return player
+    end
+
+    function Game.murdererPlayer()
+        local player = playerByName(Game.Murderer, true)
+        if player then return player end
+        -- Fallback for the window before role data arrives.
+        for _, other in ipairs(U.otherPlayers()) do
+            if cachedToolRole(other) == "Murderer" and Game.isAlive(other) then return other end
+        end
+        return nil
+    end
+
+    function Game.sheriffPlayer()
+        return playerByName(Game.Sheriff, true) or playerByName(Game.Hero, true)
+    end
+
+    -- ------------------------------------------------------------------ map
+    -- The round map is whichever workspace child owns a CoinContainer. The
+    -- lobby has one too, so it is matched separately.
+    local function isMapModel(obj)
+        return obj:FindFirstChild("CoinContainer") ~= nil
+    end
+
+    function Game.map()
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj.Name ~= "Lobby" and isMapModel(obj) then return obj end
+        end
+        return nil
+    end
+
+    function Game.lobby()
+        local lobby = workspace:FindFirstChild("Lobby")
+        if lobby and isMapModel(lobby) then return lobby end
+        return nil
+    end
+
+    function Game.inRound() return Game.map() ~= nil end
+
+    function Game.roundTime()
+        local part = workspace:FindFirstChild("RoundTimerPart")
+        if not part then return nil end
+        local ok, value = pcall(function() return part:GetAttribute("Time") end)
+        if ok and typeof(value) == "number" then return value end
+        return nil
+    end
+
+    -- ---------------------------------------------------------------- coins
+    -- Coin entries come in two shapes depending on map age: a bare BasePart, or
+    -- a `Coin_Server` model wrapping `CoinVisual.MainCoin`.
+    local function coinPart(obj)
+        if obj:IsA("BasePart") then return obj end
+        local visual = obj:FindFirstChild("CoinVisual")
+        if visual then
+            local main = visual:FindFirstChild("MainCoin")
+            if main and main:IsA("BasePart") then return main end
+        end
+        return obj:FindFirstChildWhichIsA("BasePart", true)
+    end
+    Game.coinPart = coinPart
+
+    function Game.coinContainers()
+        local out = {}
+        local map = Game.map()
+        if map then
+            local container = map:FindFirstChild("CoinContainer")
+            if container then out[#out + 1] = container end
+        end
+        if KH.S.Farm.LobbyFarm then
+            local lobby = Game.lobby()
+            local container = lobby and lobby:FindFirstChild("CoinContainer")
+            if container then out[#out + 1] = container end
+        end
+        return out
+    end
+
+    -- Returns {model = Instance, part = BasePart} pairs.
+    function Game.coins()
+        local out = {}
+        for _, container in ipairs(Game.coinContainers()) do
+            for _, obj in ipairs(container:GetChildren()) do
+                local part = coinPart(obj)
+                if part then out[#out + 1] = {model = obj, part = part} end
+            end
+        end
+        return out
+    end
+
+    function Game.nearestCoin(skip)
+        local root = U.myRoot()
+        if not root then return nil end
+        local best, bestDist = nil, math.huge
+        for _, coin in ipairs(Game.coins()) do
+            if not (skip and skip[coin.model]) then
+                local dist = (coin.part.Position - root.Position).Magnitude
+                if dist < bestDist then best, bestDist = coin, dist end
+            end
+        end
+        return best, bestDist
+    end
+
+    -- ------------------------------------------------ dropped gun and traps
+    -- Tracked by event rather than by scanning: `GunDrop` appears exactly once
+    -- per round at most, and a per-frame descendant sweep of an MM2 map is
+    -- genuinely expensive.
+    Game.GunDrop = nil
+    Game.Traps   = {}
+
+    local function noteDescendant(obj)
+        if obj.Name == "GunDrop" and obj:IsA("BasePart") then
+            Game.GunDrop = obj
+            emit("GunDropped", obj)
+        elseif obj.Name == "Trap" and obj:IsA("BasePart") then
+            Game.Traps[obj] = true
+            emit("TrapPlaced", obj)
+        end
+    end
+
+    local function forgetDescendant(obj)
+        if obj == Game.GunDrop then
+            Game.GunDrop = nil
+            emit("GunTaken", obj)
+        elseif Game.Traps[obj] then
+            Game.Traps[obj] = nil
+        end
+    end
+
+    KH.track(workspace.DescendantAdded:Connect(noteDescendant))
+    KH.track(workspace.DescendantRemoving:Connect(forgetDescendant))
+
+    -- Catch a gun already lying on the ground when the script is executed.
+    KH.spawn(function()
+        local map = Game.map()
+        if map then
+            local existing = map:FindFirstChild("GunDrop", true)
+            if existing and existing:IsA("BasePart") then Game.GunDrop = existing end
+        end
+    end)
+
+    -- --------------------------------------------------------- round change
+    KH.track(workspace.ChildAdded:Connect(function(obj)
+        task.wait(0.5) -- CoinContainer is parented in a frame or two after the model
+        if obj.Parent == workspace and obj.Name ~= "Lobby" and isMapModel(obj) then
+            Game.Traps = {}
+            Game.GunDrop = nil
+            emit("RoundStart", obj)
+        end
+    end))
+
+    KH.track(workspace.ChildRemoved:Connect(function(obj)
+        if obj.Name ~= "Lobby" and obj:FindFirstChild("CoinContainer") then
+            Game.Data = {}
+            Game.Murderer, Game.Sheriff, Game.Hero = nil, nil, nil
+            Game.Traps = {}
+            Game.GunDrop = nil
+            emit("RoundEnd")
+        end
+    end))
+
+    -- ---------------------------------------------------------------- tools
+    local function findTool(name)
+        local char = U.charOf(LocalPlayer)
+        local held = char and char:FindFirstChild(name)
+        if held then return held, true end
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        local stowed = backpack and backpack:FindFirstChild(name)
+        if stowed then return stowed, false end
+        return nil, false
+    end
+
+    function Game.gunTool()   return findTool("Gun") end
+    function Game.knifeTool() return findTool("Knife") end
+
+    function Game.equip(tool)
+        if not tool then return false end
+        local char = U.charOf(LocalPlayer)
+        if not char then return false end
+        if tool.Parent == char then return true end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return false end
+        return pcall(function() hum:EquipTool(tool) end)
+    end
+
+    -- ---------------------------------------------------------------- shoot
+    -- The gun's shot is a RemoteFunction that takes a world position; the
+    -- server does the hit test. That is why aim here means "send the right
+    -- coordinates", not "move the camera".
+    local beamCache
+    local function beamRemote(gun)
+        if beamCache and beamCache.Parent and beamCache:IsDescendantOf(gun) then
+            return beamCache
+        end
+        local remote
+        local knifeLocal = gun:FindFirstChild("KnifeLocal")
+        local createBeam = knifeLocal and knifeLocal:FindFirstChild("CreateBeam")
+        if createBeam then
+            remote = createBeam:FindFirstChild("RemoteFunction")
+                or (createBeam:IsA("RemoteFunction") and createBeam)
+        end
+        -- Loose fallback in case the tool's internals get renamed again.
+        if not remote then
+            remote = gun:FindFirstChildWhichIsA("RemoteFunction", true)
+        end
+        beamCache = remote
+        return remote
+    end
+    Game.beamRemote = beamRemote
+
+    -- Older builds of the gun expect the tag "AH"; current ones want "AH2".
+    -- Start on the current one and latch onto whichever the server accepts.
+    local SHOT_TAGS = {"AH2", "AH"}
+    local tagIndex = 1
+    local equipPending = false
+    Game.ShotsFired = 0
+
+    function Game.shoot(position)
+        local gun, equipped = Game.gunTool()
+        if not gun then return false, "no gun" end
+        if not equipped then
+            -- One shot at a time may sit waiting on an equip; without this a
+            -- held aim key stacks a fresh waiter every frame and they all fire
+            -- at once the moment the gun lands.
+            if equipPending then return false, "equipping" end
+            -- MM2 rejects a shot from a gun that is not actually held, so draw
+            -- it first. It stays out afterwards — nothing here ever stows it.
+            if not Game.equip(gun) then return false, "could not equip" end
+        end
+
+        local remote = beamRemote(gun)
+        if not remote then return false, "no shot remote" end
+
+        -- InvokeServer blocks until the server replies. Off the render thread it
+        -- goes, or a laggy round would freeze the whole menu.
+        KH.detach(function()
+            -- EquipTool does not take effect instantly. Firing in the same
+            -- frame we drew the gun races the reparent, and the server drops a
+            -- shot from a gun it does not yet think we are holding — which is
+            -- exactly the first shot after picking one up. Give it a moment.
+            if not equipped then
+                equipPending = true
+                local char = U.charOf(LocalPlayer)
+                local began = os.clock()
+                while gun.Parent ~= char and os.clock() - began < 0.35 do
+                    task.wait()
+                    char = U.charOf(LocalPlayer)
+                end
+                equipPending = false
+            end
+
+            local ok = pcall(function()
+                remote:InvokeServer(1, position, SHOT_TAGS[tagIndex])
+            end)
+            if not ok then
+                tagIndex = (tagIndex % #SHOT_TAGS) + 1
+                pcall(function()
+                    remote:InvokeServer(1, position, SHOT_TAGS[tagIndex])
+                end)
+            end
+        end)
+
+        Game.ShotsFired = Game.ShotsFired + 1
+        return true
+    end
+
+    -- ---------------------------------------------------------------- knife
+    function Game.stab()
+        local knife, equipped = Game.knifeTool()
+        if not knife then return false, "no knife" end
+        if not equipped and not Game.equip(knife) then return false, "could not equip" end
+
+        local stab = knife:FindFirstChild("Stab")
+        if not stab or not stab:IsA("RemoteEvent") then return false, "no stab remote" end
+
+        pcall(function() stab:FireServer("Down") end)
+        -- The swing is a down/up pair; without the release the tool can stick.
+        KH.detach(function()
+            task.wait(0.06)
+            pcall(function() stab:FireServer("Up") end)
+        end)
+        return true
+    end
+
+    function Game.throwKnife(targetPos)
+        local knife, equipped = Game.knifeTool()
+        if not knife then return false, "no knife" end
+        if not equipped and not Game.equip(knife) then return false, "could not equip" end
+
+        local char = U.charOf(LocalPlayer)
+        local hand = char and (char:FindFirstChild("RightHand")
+            or char:FindFirstChild("Right Arm")
+            or char:FindFirstChild("HumanoidRootPart"))
+        if not hand then return false, "no hand" end
+
+        local events = knife:FindFirstChild("Events")
+        local thrown = events and events:FindFirstChild("KnifeThrown")
+        if not thrown then thrown = knife:FindFirstChild("Throw") end
+        if not thrown or not thrown:IsA("RemoteEvent") then return false, "no throw remote" end
+
+        pcall(function()
+            thrown:FireServer(CFrame.new(hand.Position), CFrame.new(targetPos))
+        end)
+        return true
+    end
+end
