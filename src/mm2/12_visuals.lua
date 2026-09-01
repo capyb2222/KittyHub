@@ -80,9 +80,8 @@ do
     end)
 
     -- =============================================================== X-RAY
-    -- Only the round map is touched. Player characters, coins and the dropped
-    -- gun keep their real transparency, otherwise x-ray would hide the very
-    -- things you turned it on to see.
+    -- Only the map. Characters, coins and the dropped gun keep their real
+    -- transparency, or x-ray would hide what you turned it on to see.
     local xraySaved = {}
     local xrayOn = false
 

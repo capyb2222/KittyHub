@@ -261,9 +261,8 @@ do
     end
 
     -- ============================================================= DROPDOWN
-    -- Expands inline rather than floating a popup: the page is an auto-sizing
-    -- ScrollingFrame, so pushing rows down is both simpler and immune to the
-    -- z-order problems a floating list would bring.
+    -- Expands inline instead of floating a popup: the page auto-sizes, so
+    -- pushing rows down avoids every z-order problem a popup would bring.
     function UI.dropdown(section, opts)
         local row = baseRow(section, opts)
         local options = opts.options or {}
@@ -560,9 +559,8 @@ do
     end
 
     -- ========================================================= COLOUR PICKER
-    -- Built from three gradient strips (hue / saturation / value) rather than a
-    -- 2D swatch image, so it needs no uploaded assets and renders identically
-    -- on every executor.
+    -- Three gradient strips rather than a 2D swatch image, so it needs no
+    -- uploaded assets and renders identically on every executor.
     function UI.colorpicker(section, opts)
         local row = baseRow(section, opts)
 

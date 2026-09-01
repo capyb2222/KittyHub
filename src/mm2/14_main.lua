@@ -20,7 +20,11 @@ do
 
     -- =============================================================== HOTKEYS
     UI.registerKeybind("Menu", function() return S.UI.MenuKey end, function() return UI.IsOpen end)
-    UI.registerKeybind("Aimbot", function() return S.Aim.Key end, function() return Combat.isEngaged() end)
+    -- Press mode is never "engaged", so light the chip while its shot is in
+    -- flight instead — otherwise the key would look dead every time it works.
+    UI.registerKeybind("Aimbot", function() return S.Aim.Key end, function()
+        return Combat.isEngaged() or Combat.Mouse.active() ~= nil
+    end)
     UI.registerKeybind("Noclip", function() return S.Move.NoclipKey end, function() return S.Move.Noclip end)
     UI.registerKeybind("Fly", function() return S.Move.FlyKey end, function() return S.Move.Fly end)
     UI.refreshKeybinds()
@@ -52,9 +56,9 @@ do
             if S.Aim.Mode == "Toggle" then
                 Combat.setToggle(not Combat.toggleArmedState())
                 UI.refreshKeybinds()
-            elseif S.Aim.Mode == "Hold" then
-                -- Fire immediately on the press; the render loop keeps it going
-                -- for as long as the key is held.
+            elseif S.Aim.Mode == "Press" or S.Aim.Mode == "Hold" then
+                -- Both shoot on the press. Hold then keeps going from the
+                -- render loop while the key is down; Press is done here.
                 Combat.fireOnce(true)
             end
         end

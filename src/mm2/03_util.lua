@@ -72,9 +72,8 @@ do
     end
 
     -- ---------------------------------------------------------------- screen
-    -- Returns screen position, on-screen flag, and depth. Depth is negative
-    -- when the point is behind the camera, which callers need in order to flip
-    -- off-screen indicator arrows to the correct side.
+    -- Screen position, on-screen flag, depth. Depth goes negative behind the
+    -- camera, which is what flips off-screen arrows to the right side.
     function U.toScreen(worldPos)
         local cam = KH.camera()
         local v, onScreen = cam:WorldToViewportPoint(worldPos)
@@ -82,9 +81,8 @@ do
     end
 
     -- ------------------------------------------------------------ prediction
-    -- MM2's shot remote takes a world position, and the server validates it
-    -- against where the target actually is by the time the packet lands. So the
-    -- lead has to cover both the target's motion and our round trip.
+    -- The server checks the position against where the target is when the
+    -- packet lands, so the lead covers their motion and our round trip.
     function U.predict(char, strength, usePing, partOverride)
         local part = partOverride or U.torsoOf(char)
         if not part then return nil end
@@ -96,9 +94,8 @@ do
         local velocity = part.AssemblyLinearVelocity or Vector3.zero
         local moveDir = hum and hum.MoveDirection or Vector3.zero
 
-        -- Vertical velocity is damped hard: a jumping target's Y velocity swings
-        -- far more than its hitbox actually moves, and over-leading upward is
-        -- the single most common way these shots miss.
+        -- Y is damped hard: a jumping target's vertical velocity swings far
+        -- more than its hitbox does, and over-leading up is the usual miss.
         local flattened = Vector3.new(velocity.X * 0.75, velocity.Y * 0.35, velocity.Z * 0.75)
         local lead = flattened * (strength / 15) + moveDir * strength
 
@@ -123,9 +120,8 @@ do
     end
 
     -- ----------------------------------------------------------------- sound
-    -- Accepts a numeric asset id or a full URI. `rbxasset://sounds/...` files
-    -- ship with the client itself, so they always resolve — worth preferring
-    -- for alerts that must actually be audible.
+    -- Asset id or full URI. `rbxasset://sounds/...` ships with the client, so
+    -- it always resolves — worth preferring for alerts that must be audible.
     local soundCache = {}
     function U.playSound(assetId, volume)
         local sound = soundCache[assetId]

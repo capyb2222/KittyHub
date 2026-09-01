@@ -28,30 +28,102 @@ walk speed and camera — the game looks untouched afterwards.
 
 ### Aimbot
 Press the key and the gun comes out, the murderer gets shot, and the gun stays out.
-That's the whole interaction — **your mouse never moves and nothing needs to be on
-screen**.
+One press is one shot: it locks on, fires, and hands the camera straight back.
 
-That works because MM2's gun is server-authoritative: the shot is a `RemoteFunction`
-carrying a world position, and the server decides what it hit. Aiming means *sending
-good coordinates*, not pointing a camera. So there is deliberately **no line-of-sight
-check and no range limit** — the murderer can be behind a wall on the far side of the
-map and the shot still lands. Prediction is what decides whether you hit, not
-visibility.
+MM2's gun is server-authoritative: the shot is a `RemoteFunction` carrying a world
+position, and the server decides what it hit. So target selection has deliberately
+**no line-of-sight check and no range limit**. On the `Remote` fire method that holds
+all the way through — the murderer can be behind a wall on the far side of the map and
+the shot still lands. On `Mouse` the click is a client raycast, so a wall between you
+and them stops it the way it stops everyone else.
 
 | | |
 |---|---|
 | **Targeting** | Murderer (default), Nearest, or closest to crosshair |
-| **Trigger** | Hold a key, toggle it, or fire continuously |
+| **Trigger** | `Press` (default) fires one shot per key press; or hold the key, toggle it, or fire continuously |
 | **Auto equip** | Draws the gun if it is stowed, then waits for the server to register it before firing |
 | **Keep equipped** | Re-draws the gun after a respawn or round change |
 | **Prediction** | Velocity lead with damped vertical component, tunable 0–8 studs |
 | **Ping compensation** | Scales the lead by your measured round trip |
-| **Silent aim** | Redirects the shots *you* fire by hand — needs `hookmetamethod` |
+| **Fire method** | `Mouse` (default) aims the real cursor and lets MM2 fire; `Remote` sends the shot itself — see below |
+| **Silent aim** | Redirects the shots *you* fire by hand. Works without `hookmetamethod` — see below |
 | **Kill All** | Fires at every living player, paced so the server does not drop them |
+
+**Aimbot Status** on the same tab says in one line why nothing is being shot —
+`waiting for C`, `no gun`, `no target`, or what the last shot did. An aimbot
+that does nothing looks the same whether the key never registered, the gun is
+not yours, or the shot is going out and the server is dropping it, and only the
+last of those is worth changing the fire method over.
+
+### Fire method
+`Mouse` is the default. It builds no shot at all — it turns the camera onto the
+target, drives the real cursor onto them, and clicks, so MM2's own gun script
+fires the shot the way it does for a human. Nothing about it needs a hook, and
+it works where a built shot is ignored. It needs the executor to expose
+synthetic mouse input (`mousemoverel` / `mousemoveabs`, `mouse1press` /
+`mouse1click`, or `VirtualInputManager`); **Mouse Control** on the Aimbot tab
+names what it found, or says the executor has none. With **Turn Camera** on the
+target does not have to be on screen — facing them is what puts them there, and
+**Aim Speed** below 1 walks the cursor across instead of teleporting it.
+
+Prediction does not apply on this route. The lead exists to cover a server-side
+shot's flight and your ping; a client raycast has neither, so leading only walks
+the ray off the target's body — worst on someone falling, whose downward
+velocity drags the aim point below them.
+
+The trade is visibility: this one moves your camera and your cursor, and anyone
+spectating sees that.
+
+`Remote` is the quiet one: the position goes straight to the server, your view
+never moves and walls do not matter. It is strictly better **where the game
+accepts it** — and where it does not, it fails silently, since the shot remote
+answers the same either way. **Aimbot Status** showing `remote shot at <name>`
+while nobody dies is what that looks like.
+
+### Silent aim without a hook
+Silent aim is normally gated behind `hookmetamethod`, which most free executors
+either do not ship or ship as a stub that reports success and hooks nothing.
+That gate is avoidable. MM2's gun never raycasts on the client: `KnifeLocal`
+reads your mouse and hands the server a world position, and the server alone
+decides what was hit — which is the same fact the aimbot already runs on.
+
+So there are three routes, and Kitty Hub takes the best one the executor can
+actually do. The **Silent Aim Route** dropdown forces one; **Route In Use** on
+the same tab and in Settings → Session says which is live.
+
+| Route | Needs | What happens |
+|---|---|---|
+| `hook` | a working `hookmetamethod`, or `getrawmetatable` + `setreadonly` | Your shot's position argument is rewritten in flight. Nothing else changes |
+| `takeover` | the ability to set `Disabled` on a script — every executor | MM2's gun script is switched off on your client, so your click no longer produces a shot of its own, and Kitty Hub fires the aimed one from that same click. Still one shot, still on target. You lose the shot sound and muzzle flash your own client plays; the beam and the kill come from the server, so everyone including you still sees those |
+| `click` | nothing | The old stand-in: your click fires an aimed shot *beside* your real one, so two beams go out |
+
+Takeover and the `Mouse` fire method cannot both be on: the mouse aimbot fires
+MM2's gun script and takeover switches that script off. With `Mouse` selected,
+silent aim uses the hook if there is one and click aim otherwise, and **Route In
+Use** says so.
+
+The hook install is verified rather than trusted — it has to fire on a harmless
+call before Auto will use it, which is what keeps a stubbed `hookmetamethod`
+from silently selecting a route that does nothing. Everything the takeover
+route touches is a client-side property write, so none of it replicates, and
+turning the toggle off (or unloading) switches MM2's script back on and
+re-draws the gun so it re-initialises.
+
+`can_silent_aim.lua` in the repo root reports all three routes for an executor
+without loading the rest of the script.
 
 ### Knife (murderer)
 Auto throw with prediction, knife aura with a radius, teleport-stab that blinks
 back to where you were, and a target filter that can prioritise or avoid the sheriff.
+
+Throwing and blinking both have a range: a knife thrown further than it can reach
+just leaves you unarmed until it returns, and crossing the map to stab someone is
+a teleport everyone sees rather than a stab. Anyone already within swinging
+distance is stabbed where they stand instead of being blinked to.
+
+Auto grab of the dropped gun never fires when you are the murderer — you cannot
+pick it up, so it would only teleport you onto the sheriff's body seconds after
+killing them and stand there until the pickup timed out.
 
 ### ESP
 Corner or full boxes, names, role labels, distance, health bars, tracers, chams,
@@ -100,7 +172,7 @@ profiles saved to `KittyHub/configs/`.
 | Key | Action |
 |---|---|
 | `X` | Toggle menu |
-| `C` | Aim (hold) or arm the aimbot (toggle mode) |
+| `C` | One lock-and-shot at the murderer. Other triggers: hold to keep firing, toggle to stay locked on, or always-on |
 | `N` | Noclip |
 | `F` | Fly — `WASD` to move, `Space` up, `Left Shift` down |
 
@@ -210,7 +282,7 @@ feature-detected and degrades:
 | API | Without it |
 |---|---|
 | `writefile` / `makefolder` | settings live only until Roblox closes |
-| `hookmetamethod` | silent aim is unavailable; the aimbot still works |
+| `hookmetamethod` | falls back to `getrawmetatable` + `setreadonly`, then to click aim. Xeno 1.3.60 has neither hook — and its `hookfunction` is a stub that reports success without hooking — so it runs click aim |
 | `firetouchinterest` | coin farm can travel but not collect |
 
 Tested on Xeno.

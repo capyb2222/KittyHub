@@ -282,9 +282,8 @@ do
     end
 
     -- ============================================================ WAYPOINTS
-    -- Kept in their own file rather than in the settings profile: the config
-    -- reconciler drops keys it does not recognise, and waypoint names are by
-    -- definition not in the schema.
+    -- Their own file, not the settings profile: the reconciler drops keys it
+    -- does not recognise, and waypoint names are never in the schema.
     local WAYPOINT_FILE = "KittyHub/waypoints.json"
     Move.Waypoints = {}
 

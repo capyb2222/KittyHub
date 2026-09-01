@@ -48,10 +48,15 @@ do
         }))
         UI.dropdown(targeting, opt("Aim", "Mode", {
             text = "Trigger",
-            desc = "Hold the key, toggle it, or fire constantly.",
-            options = {"Hold", "Toggle", "Always"},
+            desc = "Press: one lock-and-shot per key press — it aims, fires once, and gives the camera straight back. Hold: keeps firing while the key is down. Toggle: press once to stay locked on, again to stop. Always: never stops.",
+            options = {"Press", "Hold", "Toggle", "Always"},
         }))
         UI.keybind(targeting, opt("Aim", "Key", {text = "Aim Key"}))
+        UI.dropdown(targeting, opt("Aim", "Method", {
+            text = "Fire Method",
+            desc = "Mouse (default) turns the camera onto the target, puts the cursor on them and clicks, so MM2's own gun fires the shot — the one that works without a hook. Remote hands the server the position instead: silent, shoots through walls, and does nothing at all on an executor the game does not accept built shots from.",
+            options = {"Remote", "Mouse"},
+        }))
         UI.toggle(targeting, opt("Aim", "KeepEquipped", {
             text = "Keep Gun Equipped",
             desc = "Re-draw the gun if a respawn or round change stows it.",
@@ -60,7 +65,7 @@ do
         local accuracy = UI.section(tab, "Accuracy")
         UI.slider(accuracy, opt("Aim", "Prediction", {
             text = "Prediction",
-            desc = "Studs of lead. Raise it if shots land behind a running target.",
+            desc = "Studs of lead, Remote method only. Mouse aim points at where the target actually is — leading a client raycast just walks it off their body.",
             min = 0, max = 8, step = 0.1,
         }))
         UI.toggle(accuracy, opt("Aim", "PingComp", {
@@ -75,14 +80,41 @@ do
             text = "Fire Rate", min = 0.05, max = 1, step = 0.05, suffix = "s",
         }))
 
+        local mouseAim = UI.section(tab, "Mouse Aim")
+        UI.label(mouseAim, "Only used when Fire Method is Mouse. Your camera snaps onto the target and the cursor is driven there, so this one is visible — to you and to anyone watching you.")
+        UI.toggle(mouseAim, opt("Aim", "CameraSnap", {
+            text = "Turn Camera",
+            desc = "Turn towards the target when they are near the edge of your view or behind you, so they do not have to be on screen already. Anyone already well inside the view is left to the cursor alone and the camera stays still. Off, the aimbot can only shoot what you can see.",
+        }))
+        UI.slider(mouseAim, opt("Aim", "MouseSpeed", {
+            text = "Aim Speed",
+            desc = "Governs the turn and the cursor together. 1 is an instant snap; lower eases both, which looks far smoother for a few frames' delay. 0.4 lands in about a tenth of a second.",
+            min = 0.1, max = 1, step = 0.05,
+        }))
+        UI.readout(mouseAim, {
+            text = "Mouse Control",
+            get = function() return Combat.Mouse.support() end,
+        })
+
         local extras = UI.section(tab, "Extras")
         UI.toggle(extras, opt("Aim", "SilentAim", {
             text = "Silent Aim",
-            desc = Combat.SilentAvailable
-                and "Redirects the shots you fire by hand."
-                or "Unavailable — this executor has no metamethod hook.",
+            desc = Combat.SilentDesc,
         }))
+        UI.dropdown(extras, opt("Aim", "SilentMode", {
+            text = "Silent Aim Route",
+            desc = "Auto picks the best one your executor can do. Takeover needs no hook at all — switch to it by hand if Auto's hook reports success but your shots still miss.",
+            options = {"Auto", "Hook", "Takeover", "Click"},
+        }))
+        UI.readout(extras, {
+            text = "Route In Use",
+            get = function() return Combat.silentStatus() end,
+        })
         UI.toggle(extras, opt("Aim", "NotifyShot", {text = "Notify On Shot"}))
+        UI.readout(extras, {
+            text = "Aimbot Status",
+            get = function() return Combat.aimStatus() end,
+        })
         UI.readout(extras, {
             text = "Current Target",
             get = function()
@@ -113,6 +145,11 @@ do
         UI.slider(throwing, opt("Knife", "ThrowDelay", {
             text = "Throw Delay", min = 0.2, max = 5, step = 0.1, suffix = "s",
         }))
+        UI.slider(throwing, opt("Knife", "ThrowRange", {
+            text = "Throw Range",
+            desc = "Do not throw at anyone further away than this. The knife is gone until it comes back, so a throw that cannot reach costs you the weapon for nothing.",
+            min = 20, max = 200, step = 5, suffix = " studs",
+        }))
         UI.button(throwing, {
             text = "Throw Now",
             callback = function()
@@ -135,13 +172,18 @@ do
         }))
         UI.toggle(melee, opt("Knife", "TpStab", {
             text = "Teleport Stab",
-            desc = "Blink to the target, swing, blink back.",
+            desc = "Blink to the target, swing, blink back. Anyone already within swinging distance is stabbed where they stand.",
+        }))
+        UI.slider(melee, opt("Knife", "TpRange", {
+            text = "Teleport Range",
+            desc = "How far a blink is worth making. Crossing the map to reach someone is not a stab, it is a teleport everyone sees.",
+            min = 20, max = 400, step = 10, suffix = " studs",
         }))
 
         local targets = UI.section(tab, "Target Filter")
         UI.toggle(targets, opt("Knife", "TargetSheriff", {
             text = "Prioritise Sheriff",
-            desc = "Go for whoever is holding the gun first.",
+            desc = "Go for whoever is holding the gun first, then everyone else by distance.",
         }))
         UI.toggle(targets, opt("Knife", "SkipSheriff", {
             text = "Never Target Sheriff",
@@ -690,7 +732,18 @@ do
         UI.readout(session, {text = "Executor", get = function() return KH.X.name end})
         UI.readout(session, {
             text = "Silent Aim Support",
-            get = function() return Combat.SilentAvailable and "available" or "unavailable" end,
+            get = function() return Combat.silentStatus() end,
+        })
+        UI.readout(session, {
+            text = "Mouse Control",
+            get = function() return Combat.Mouse.support() end,
+        })
+        UI.readout(session, {
+            text = "Metamethod Hook",
+            get = function()
+                if Combat.HookAvailable then return tostring(Combat.SilentRoute) end
+                return "none — " .. (Combat.SilentReason or "not exposed")
+            end,
         })
         UI.button(session, {
             text = "Rejoin Server",

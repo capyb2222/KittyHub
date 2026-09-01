@@ -8,35 +8,37 @@ do
     local HttpService = KH.Services.HttpService
     local X = KH.X
 
-    -- Defaults double as the schema. Anything missing from a saved profile (or
-    -- from an older build's cached settings) is backfilled from here, and keys
-    -- that no longer exist here are dropped, so upgrading never leaves a config
-    -- half-migrated.
+    -- Defaults double as the schema: a saved profile is backfilled from here
+    -- and keys that no longer exist are dropped, so upgrades never half-migrate.
     local DEFAULTS = {
-        -- No line-of-sight or range gate here on purpose. MM2's shot is a world
-        -- position the server resolves, so the murderer can be hit through a
-        -- wall on the far side of the map — gating on visibility would throw
-        -- away the one thing that makes this worth using.
+        -- No line-of-sight or range gate on purpose: the server resolves the
+        -- position, so the murderer can be hit through a wall across the map.
         Aim = {
             Enabled       = true,
             Target        = "Murderer",  -- Murderer | Nearest | Crosshair
-            Mode          = "Hold",      -- Hold | Toggle | Always
+            Mode          = "Press",     -- Press | Hold | Toggle | Always
             Key           = "C",
+            Method        = "Mouse",     -- Remote | Mouse
+            CameraSnap    = true,        -- Mouse method: face the target first
+            MouseSpeed    = 0.4,         -- 1 snaps, lower eases the turn and walk
             Prediction    = 2.8,         -- studs of lead per unit of velocity
             PingComp      = true,        -- scale lead by measured ping
             FireRate      = 0.10,        -- seconds between shots
             KeepEquipped  = true,        -- re-draw the gun if it gets stowed
             SilentAim     = false,       -- redirect your own manual shots
+            SilentMode    = "Auto",      -- Auto | Hook | Takeover | Click
             AimAtHead     = false,       -- Head instead of HumanoidRootPart
             NotifyShot    = false,
         },
         Knife = {
             AutoThrow     = false,
             ThrowDelay    = 1.2,
+            ThrowRange    = 70,          -- past this the knife is just thrown away
             Aura          = false,
             AuraRadius    = 18,
             AuraDelay     = 0.15,
             TpStab        = false,
+            TpRange       = 150,         -- how far a blink is worth making
             SkipSheriff   = false,
             TargetSheriff = false,
         },
@@ -132,9 +134,8 @@ do
         return out
     end
 
-    -- Reconcile `dst` against `schema`: fill gaps, drop strays, and reject
-    -- values whose type no longer matches (a toggle that became a slider would
-    -- otherwise crash the control that reads it).
+    -- Fill gaps, drop strays, reject values whose type no longer matches — a
+    -- toggle that became a slider would crash the control reading it.
     local function reconcile(dst, schema)
         for k, v in pairs(schema) do
             if typeof(v) == "table" then
@@ -153,8 +154,7 @@ do
     KH.S = S
 
     -- ------------------------------------------------------- (de)serialising
-    -- Color3 has no JSON representation, so it round-trips through a tagged
-    -- table. Everything else is plain JSON.
+    -- Color3 has no JSON form, so it round-trips through a tagged table.
     local function encode(v)
         if typeof(v) == "Color3" then
             return {__c3 = {
@@ -237,9 +237,8 @@ do
 
         local loaded = decode(data)
         reconcile(loaded, DEFAULTS)
-        -- Mutate S in place: every control captured a reference to its own
-        -- sub-table when it was built, so swapping S wholesale would orphan all
-        -- of them and the menu would stop reflecting reality.
+        -- In place: every control captured a reference to its own sub-table,
+        -- so swapping S wholesale would orphan the lot.
         for group, values in pairs(loaded) do
             if typeof(S[group]) == "table" and typeof(values) == "table" then
                 for k, v in pairs(values) do S[group][k] = v end

@@ -139,6 +139,17 @@ do
         if grabbing then return false end
         if Game.gunTool() then return false end -- already armed
 
+        -- The murderer cannot pick the gun up. Going anyway means teleporting
+        -- onto the sheriff's body seconds after killing them, standing there
+        -- while the pickup that will never happen times out, and teleporting
+        -- back — in front of whoever is watching.
+        if Game.amMurderer() then
+            if announce then
+                UI.notify({title = "Gun Drop", text = "You are the murderer — that gun is not yours to take.", kind = "warn"})
+            end
+            return false
+        end
+
         grabbing = true
         KH.detach(function()
             local root = U.myRoot()

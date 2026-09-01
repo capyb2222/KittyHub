@@ -25,11 +25,9 @@ if type(env.KittyHubCleanup) == "function" then
     pcall(env.KittyHubCleanup)
 end
 
--- Every module hangs its exports off KH. Keeping state in one table (instead of
--- hundreds of file-level locals) matters here: the build concatenates every
--- source file into a single Lua chunk, and a chunk's main body is capped at 200
--- active locals. Module bodies are wrapped in `do ... end` so their locals are
--- released at the end of the block.
+-- Every module hangs its exports off KH. One table instead of hundreds of
+-- file-level locals: the build concatenates every source into a single chunk,
+-- and a chunk's main body is capped at 200 active locals.
 local KH = {
     Version = "3.0.0",
     Conn    = {}, -- RBXScriptConnections   -> disconnected on unload
@@ -68,10 +66,8 @@ function KH.spawn(fn)
     return thread
 end
 
--- Fire-and-forget: short-lived work that completes on its own and needs no
--- cancellation. Deliberately NOT tracked — the aimbot spawns one of these per
--- shot, and recording every one would grow the thread table without bound over
--- a long session.
+-- Fire-and-forget: short work that needs no cancellation. Deliberately not
+-- tracked — the aimbot spawns one per shot and the table would grow forever.
 function KH.detach(fn)
     return task.spawn(function()
         local ok, err = pcall(fn)
@@ -96,9 +92,8 @@ function KH.loop(interval, fn)
 end
 
 -- ------------------------------------------------------------- error damping
--- A feature that throws every frame would otherwise spam the console into
--- uselessness (and on some executors, tank the framerate). Report the first few
--- failures per site, then go quiet.
+-- A feature that throws every frame would spam the console into uselessness.
+-- Report the first few failures per site, then go quiet.
 local errSeen = {}
 function KH.safe(name, fn, ...)
     local ok, err = pcall(fn, ...)
@@ -114,9 +109,8 @@ function KH.safe(name, fn, ...)
 end
 
 -- ------------------------------------------------------- per-frame scheduler
--- One RenderStepped connection drives everything. Jobs register here rather
--- than opening their own connection, so ordering is explicit and unload is a
--- single disconnect.
+-- One RenderStepped connection drives everything, so ordering is explicit and
+-- unload is a single disconnect.
 function KH.onFrame(name, fn, order)
     KH.Frame[#KH.Frame + 1] = {name = name, fn = fn, order = order or 50}
     table.sort(KH.Frame, function(a, b) return a.order < b.order end)
@@ -132,7 +126,14 @@ X.listfiles     = type(listfiles) == "function"
 X.makefolder    = type(makefolder) == "function" and type(isfolder) == "function"
 X.firetouch     = type(firetouchinterest) == "function"
 X.hookmetamethod = type(hookmetamethod) == "function" and type(getnamecallmethod) == "function"
+X.rawmeta       = type(getrawmetatable) == "function" and type(setreadonly) == "function"
+X.newcclosure   = type(newcclosure) == "function"
 X.checkcaller   = type(checkcaller) == "function"
+-- Synthetic input. Every executor names these the same way, and an executor
+-- that ships none of them cannot drive the mouse aimbot.
+X.mousemove     = type(mousemoverel) == "function" or type(mousemoveabs) == "function"
+X.mouseclick    = type(mouse1click) == "function"
+    or (type(mouse1press) == "function" and type(mouse1release) == "function")
 X.setclipboard  = type(setclipboard) == "function"
 X.queueteleport = type(queue_on_teleport) == "function" or type(syn) == "table"
 X.identifyexec  = type(identifyexecutor) == "function"

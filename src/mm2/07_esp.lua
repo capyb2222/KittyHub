@@ -337,9 +337,8 @@ do
     end
 
     -- ====================================================== WORLD MARKERS
-    -- Coins, the dropped gun and traps are anchored in 3D, so they use
-    -- BillboardGuis (cheap, no per-frame projection maths on our side) and are
-    -- rebuilt on a timer rather than every frame.
+    -- Anchored in 3D, so BillboardGuis carry them — no per-frame projection
+    -- on our side — and they rebuild on a timer rather than every frame.
     local markers = {} -- instance -> BillboardGui
 
     local function marker(part, text, color, size, maxDistance)

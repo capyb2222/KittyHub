@@ -40,9 +40,8 @@ do
     end
 
     -- ------------------------------------------------------------- remotes
-    -- MM2 has moved these around between updates, so resolve by recursive name
-    -- lookup rather than a hard path, and re-resolve if the cached instance
-    -- gets reparented out from under us.
+    -- MM2 moves these between updates, so resolve by recursive name lookup
+    -- and re-resolve if the cached instance gets reparented.
     local remoteCache = {}
     local function findRemote(name)
         local cached = remoteCache[name]
@@ -90,9 +89,8 @@ do
         return false
     end
 
-    -- The server pushes the whole table whenever anyone's state changes, which
-    -- is how roles are known the instant a round starts — well before the
-    -- murderer's knife is visible to anyone.
+    -- The server pushes the whole table on any state change, which is how the
+    -- murderer is known before their knife is visible to anyone.
     KH.spawn(function()
         local gameplay = findRemote("PlayerDataChanged")
         if gameplay and gameplay:IsA("RemoteEvent") then
@@ -108,9 +106,8 @@ do
     end)
 
     -- ------------------------------------------------- tool-based fallback
-    -- Works without any remote at all, and is the only way to spot a Hero the
-    -- moment they pick the dropped gun up. Cached briefly because ESP asks for
-    -- every player's role on every frame.
+    -- No remote needed, and the only way to spot a Hero the moment they pick
+    -- the gun up. Cached briefly: ESP asks for every role every frame.
     local toolCache, toolCacheAt = {}, 0
 
     local function toolRole(player)
@@ -203,8 +200,8 @@ do
     end
 
     -- ------------------------------------------------------------------ map
-    -- The round map is whichever workspace child owns a CoinContainer. The
-    -- lobby has one too, so it is matched separately.
+    -- Whichever workspace child owns a CoinContainer. The lobby has one too,
+    -- so it is matched separately.
     local function isMapModel(obj)
         return obj:FindFirstChild("CoinContainer") ~= nil
     end
@@ -287,9 +284,8 @@ do
     end
 
     -- ------------------------------------------------ dropped gun and traps
-    -- Tracked by event rather than by scanning: `GunDrop` appears exactly once
-    -- per round at most, and a per-frame descendant sweep of an MM2 map is
-    -- genuinely expensive.
+    -- By event, not by scanning: `GunDrop` appears at most once a round and a
+    -- per-frame sweep of an MM2 map is expensive.
     Game.GunDrop = nil
     Game.Traps   = {}
 
@@ -369,9 +365,8 @@ do
     end
 
     -- ---------------------------------------------------------------- shoot
-    -- The gun's shot is a RemoteFunction that takes a world position; the
-    -- server does the hit test. That is why aim here means "send the right
-    -- coordinates", not "move the camera".
+    -- A RemoteFunction taking a world position; the server does the hit test.
+    -- Aim means sending the right coordinates, not moving the camera.
     local beamCache
     local function beamRemote(gun)
         if beamCache and beamCache.Parent and beamCache:IsDescendantOf(gun) then
@@ -404,9 +399,8 @@ do
         local gun, equipped = Game.gunTool()
         if not gun then return false, "no gun" end
         if not equipped then
-            -- One shot at a time may sit waiting on an equip; without this a
-            -- held aim key stacks a fresh waiter every frame and they all fire
-            -- at once the moment the gun lands.
+            -- One waiter at a time, or a held aim key stacks a fresh one every
+            -- frame and they all fire at once when the gun lands.
             if equipPending then return false, "equipping" end
             -- MM2 rejects a shot from a gun that is not actually held, so draw
             -- it first. It stays out afterwards — nothing here ever stows it.
@@ -419,10 +413,8 @@ do
         -- InvokeServer blocks until the server replies. Off the render thread it
         -- goes, or a laggy round would freeze the whole menu.
         KH.detach(function()
-            -- EquipTool does not take effect instantly. Firing in the same
-            -- frame we drew the gun races the reparent, and the server drops a
-            -- shot from a gun it does not yet think we are holding — which is
-            -- exactly the first shot after picking one up. Give it a moment.
+            -- EquipTool is not instant, and the server drops a shot from a gun
+            -- it does not yet think we hold — the first shot after a pickup.
             if not equipped then
                 equipPending = true
                 local char = U.charOf(LocalPlayer)

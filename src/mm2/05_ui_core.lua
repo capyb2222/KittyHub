@@ -715,10 +715,8 @@ do
     local KIND_COLOR = {info = nil, good = C.Good, bad = C.Bad, warn = C.Warn}
     local notifySeq = 0
 
-    -- Each toast is a card inside a layout-managed slot. The slot is what the
-    -- UIListLayout stacks; the card slides within it. Animating the card
-    -- directly would do nothing, because a list layout owns the Position of its
-    -- own children and overwrites it every frame.
+    -- A card inside a layout-managed slot: the list stacks the slot, the card
+    -- slides within it. A list layout overwrites its children's Position.
     function UI.notify(opts)
         if not S.UI.Notifications then return end
         opts = opts or {}
