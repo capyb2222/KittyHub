@@ -52,6 +52,12 @@ cd mm2-script
 python localhost.py
 ```
 
+No Python? Use the PowerShell instead, it does the same thing, and Windows already has it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File localhost.ps1
+```
+
 Run the loadstring above. It rebuilds when sources change, so just save and re-execute.
 Re-running unloads the old copy first.
 
