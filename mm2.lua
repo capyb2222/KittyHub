@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Murder Mystery 2  ·  native Roblox UI, no Drawing API
---   build 3.0.0+b0d5200b  ·  2026-09-02 04:50 UTC
+--   build 3.0.0+001c3107  ·  2026-09-02 04:54 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
@@ -7521,24 +7521,28 @@ do
         }), "TextTransparency")
 
         -- Nothing is loading, so the bar walks a fixed path rather than
-        -- pretending to measure one.
+        -- pretending to measure one. Each step glides for as long as it is held
+        -- so the bar keeps moving the whole way rather than jumping and waiting.
+        local STAGE = 0.72
         local stages = {
-            {0.3, "checking the executor"},
-            {0.6, "building the interface"},
-            {0.85, "arming features"},
+            {0.15, "checking the executor"},
+            {0.33, "building the interface"},
+            {0.52, "loading features"},
+            {0.7, "arming the aimbot"},
+            {0.88, "reading the map"},
             {1, "ready"},
         }
 
         KH.spawn(function()
-            UI.tween(blur, 0.25, {Size = 14})
+            UI.tween(blur, 0.5, {Size = 14})
             for _, stage in ipairs(stages) do
                 if not (KH.Alive and root.Parent) then return end
                 status.Text = stage[2]
-                UI.tween(fill, 0.2, {Size = UDim2.fromScale(stage[1], 1)})
-                task.wait(0.2)
+                UI.tween(fill, STAGE, {Size = UDim2.fromScale(stage[1], 1)})
+                task.wait(STAGE)
             end
 
-            task.wait(0.1)
+            task.wait(0.15)
             if not (KH.Alive and root.Parent) then return end
             for _, item in ipairs(fades) do
                 pcall(function() UI.tween(item.obj, 0.35, {[item.prop] = 1}) end)
@@ -7551,7 +7555,7 @@ do
 
         -- Whatever happens above — an error, an unload mid-fade — both come
         -- off. Reading Parent on a destroyed instance is safe.
-        task.delay(4, function()
+        task.delay(9, function()
             if root.Parent then root:Destroy() end
             if blur.Parent then blur:Destroy() end
         end)
