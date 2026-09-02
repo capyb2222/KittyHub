@@ -7,8 +7,8 @@
 --   ██║  ██╗██║   ██║      ██║      ██║       ██║  ██║╚██████╔╝██████╔╝
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
---   Murder Mystery 2  ·  native Roblox UI, no Drawing API
---   build 3.0.0+001c3107  ·  2026-09-02 04:54 UTC
+--   Murder Mystery 2 Script
+--   build 3.0.0+c8f039bc  ·  2026-09-02 05:15 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
@@ -599,7 +599,18 @@ do
         return ok and key or nil
     end
 
+    -- Roblox's chat box and our own text fields are both TextBoxes. A key
+    -- held while one of them has focus belongs to whoever is typing, not to a
+    -- feature: without this, saying "we" in chat flies you across the map.
+    function U.typing()
+        local ok, box = pcall(function()
+            return KH.Services.UserInputService:GetFocusedTextBox()
+        end)
+        return ok and box ~= nil
+    end
+
     function U.keyHeld(name)
+        if U.typing() then return false end
         local key = U.keyCode(name)
         if not key then return false end
         return KH.Services.UserInputService:IsKeyDown(key)
@@ -1183,8 +1194,16 @@ do
         if not thrown then thrown = knife:FindFirstChild("Throw") end
         if not thrown or not thrown:IsA("RemoteEvent") then return false, "no throw remote" end
 
+        -- Orientation, not just position: MM2 flies the knife along the CFrame
+        -- it is handed, and a bare CFrame.new(position) faces down the world
+        -- axis rather than at the target. Degenerate when the two points
+        -- coincide, so that case keeps the old bare frame.
+        local from = CFrame.new(hand.Position)
+        if (targetPos - hand.Position).Magnitude > 0.5 then
+            from = CFrame.new(hand.Position, targetPos)
+        end
         pcall(function()
-            thrown:FireServer(CFrame.new(hand.Position), CFrame.new(targetPos))
+            thrown:FireServer(from, CFrame.new(targetPos) * (from - from.Position))
         end)
         return true
     end
@@ -5113,9 +5132,10 @@ do
     function Move.setNoclip(on)
         S.Move.Noclip = on
         if on then
+            -- Not KH.track: this is disconnected below and on unload, and
+            -- tracking it would add a dead entry on every single toggle.
             if not noclipConn then
                 noclipConn = RunService.Stepped:Connect(noclipStep)
-                KH.track(noclipConn)
             end
         else
             if noclipConn then
@@ -5142,6 +5162,7 @@ do
 
     KH.onFrame("bhop", function()
         if not S.Move.Bhop then return end
+        if U.typing() then return end
         if not UserInputService:IsKeyDown(Enum.KeyCode.Space) then return end
         local hum = U.myHum()
         if not hum then return end
@@ -5211,6 +5232,12 @@ do
 
         local cam = KH.camera()
         local direction = Vector3.zero
+        -- Hold still while typing rather than reading the chat as flight input.
+        if U.typing() then
+            flyVelocity.Velocity = Vector3.zero
+            flyGyro.CFrame = cam.CFrame
+            return
+        end
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + cam.CFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - cam.CFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - cam.CFrame.RightVector end
@@ -5420,6 +5447,18 @@ do
     end
     KH.undo(restoreLighting)
 
+    -- Atmosphere density is not a Lighting property, so it needs recording
+    -- separately or turning fog off again leaves the map permanently clear.
+    local atmosphereSaved = {}
+
+    local function restoreAtmosphere()
+        for effect, density in pairs(atmosphereSaved) do
+            if effect.Parent then pcall(function() effect.Density = density end) end
+        end
+        atmosphereSaved = {}
+    end
+    KH.undo(restoreAtmosphere)
+
     -- Reapplied on a timer: MM2 drives its own day/night cycle per round and
     -- will happily reset Brightness out from under us.
     KH.loop(0.5, function()
@@ -5441,9 +5480,14 @@ do
             Lighting.FogStart = 1e6
             for _, effect in ipairs(Lighting:GetChildren()) do
                 if effect:IsA("Atmosphere") then
+                    if atmosphereSaved[effect] == nil then
+                        atmosphereSaved[effect] = effect.Density
+                    end
                     pcall(function() effect.Density = 0 end)
                 end
             end
+        elseif next(atmosphereSaved) then
+            restoreAtmosphere()
         end
     end)
 
@@ -5464,6 +5508,7 @@ do
     -- transparency, or x-ray would hide what you turned it on to see.
     local xraySaved = {}
     local xrayOn = false
+    local xrayValue = nil   -- the transparency actually painted on
 
     local function isProtected(part)
         -- Anything belonging to a character.
@@ -5486,6 +5531,7 @@ do
             end
         end
         xrayOn = true
+        xrayValue = S.Visual.XrayTransp
     end
 
     local function clearXray()
@@ -5509,7 +5555,9 @@ do
     end)
 
     KH.loop(1, function()
-        if S.Visual.Xray and not xrayOn then
+        -- Also when the slider has moved: the walls are already painted, so
+        -- nothing else would ever notice a new value.
+        if S.Visual.Xray and (not xrayOn or xrayValue ~= S.Visual.XrayTransp) then
             applyXray()
         elseif not S.Visual.Xray and xrayOn then
             clearXray()
@@ -5520,6 +5568,7 @@ do
     -- Turns effects off rather than destroying them, so it is fully reversible.
     local detailSaved = {}
     local lowDetailOn = false
+    local waterSaved = nil
 
     local EFFECT_CLASSES = {
         ParticleEmitter = true, Trail = true, Smoke = true,
@@ -5536,8 +5585,15 @@ do
         saveLighting()
         Lighting.GlobalShadows = false
         pcall(function()
-            workspace.Terrain.WaterWaveSize = 0
-            workspace.Terrain.WaterReflectance = 0
+            local terrain = workspace.Terrain
+            if not waterSaved then
+                waterSaved = {
+                    size = terrain.WaterWaveSize,
+                    reflectance = terrain.WaterReflectance,
+                }
+            end
+            terrain.WaterWaveSize = 0
+            terrain.WaterReflectance = 0
         end)
         lowDetailOn = true
     end
@@ -5547,6 +5603,14 @@ do
             if obj.Parent then pcall(function() obj.Enabled = true end) end
         end
         detailSaved = {}
+        -- The water was flattened by hand, so it has to be put back by hand.
+        if waterSaved then
+            pcall(function()
+                workspace.Terrain.WaterWaveSize = waterSaved.size
+                workspace.Terrain.WaterReflectance = waterSaved.reflectance
+            end)
+            waterSaved = nil
+        end
         lowDetailOn = false
     end
     KH.undo(clearLowDetail)
@@ -6088,6 +6152,20 @@ do
             end
         end
         KH.undo(function() setSpectate(nil) end)
+
+        -- Roblox hands the camera back on any respawn, theirs or yours, which
+        -- used to end the spectate silently and leave the toggle out of step.
+        KH.loop(0.4, function()
+            if not spectating then return end
+            if not spectating.Parent then
+                spectating = nil
+                return
+            end
+            local hum = U.humOf(spectating)
+            if not hum then return end   -- mid-respawn; wait for the new one
+            local cam = KH.camera()
+            if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+        end)
 
         local rows = {}
 

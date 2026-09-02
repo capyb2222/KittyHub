@@ -564,8 +564,16 @@ do
         if not thrown then thrown = knife:FindFirstChild("Throw") end
         if not thrown or not thrown:IsA("RemoteEvent") then return false, "no throw remote" end
 
+        -- Orientation, not just position: MM2 flies the knife along the CFrame
+        -- it is handed, and a bare CFrame.new(position) faces down the world
+        -- axis rather than at the target. Degenerate when the two points
+        -- coincide, so that case keeps the old bare frame.
+        local from = CFrame.new(hand.Position)
+        if (targetPos - hand.Position).Magnitude > 0.5 then
+            from = CFrame.new(hand.Position, targetPos)
+        end
         pcall(function()
-            thrown:FireServer(CFrame.new(hand.Position), CFrame.new(targetPos))
+            thrown:FireServer(from, CFrame.new(targetPos) * (from - from.Position))
         end)
         return true
     end

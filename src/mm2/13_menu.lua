@@ -523,6 +523,20 @@ do
         end
         KH.undo(function() setSpectate(nil) end)
 
+        -- Roblox hands the camera back on any respawn, theirs or yours, which
+        -- used to end the spectate silently and leave the toggle out of step.
+        KH.loop(0.4, function()
+            if not spectating then return end
+            if not spectating.Parent then
+                spectating = nil
+                return
+            end
+            local hum = U.humOf(spectating)
+            if not hum then return end   -- mid-respawn; wait for the new one
+            local cam = KH.camera()
+            if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+        end)
+
         local rows = {}
 
         local function buildRow(player)

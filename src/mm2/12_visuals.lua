@@ -40,6 +40,18 @@ do
     end
     KH.undo(restoreLighting)
 
+    -- Atmosphere density is not a Lighting property, so it needs recording
+    -- separately or turning fog off again leaves the map permanently clear.
+    local atmosphereSaved = {}
+
+    local function restoreAtmosphere()
+        for effect, density in pairs(atmosphereSaved) do
+            if effect.Parent then pcall(function() effect.Density = density end) end
+        end
+        atmosphereSaved = {}
+    end
+    KH.undo(restoreAtmosphere)
+
     -- Reapplied on a timer: MM2 drives its own day/night cycle per round and
     -- will happily reset Brightness out from under us.
     KH.loop(0.5, function()
@@ -61,9 +73,14 @@ do
             Lighting.FogStart = 1e6
             for _, effect in ipairs(Lighting:GetChildren()) do
                 if effect:IsA("Atmosphere") then
+                    if atmosphereSaved[effect] == nil then
+                        atmosphereSaved[effect] = effect.Density
+                    end
                     pcall(function() effect.Density = 0 end)
                 end
             end
+        elseif next(atmosphereSaved) then
+            restoreAtmosphere()
         end
     end)
 
@@ -84,6 +101,7 @@ do
     -- transparency, or x-ray would hide what you turned it on to see.
     local xraySaved = {}
     local xrayOn = false
+    local xrayValue = nil   -- the transparency actually painted on
 
     local function isProtected(part)
         -- Anything belonging to a character.
@@ -106,6 +124,7 @@ do
             end
         end
         xrayOn = true
+        xrayValue = S.Visual.XrayTransp
     end
 
     local function clearXray()
@@ -129,7 +148,9 @@ do
     end)
 
     KH.loop(1, function()
-        if S.Visual.Xray and not xrayOn then
+        -- Also when the slider has moved: the walls are already painted, so
+        -- nothing else would ever notice a new value.
+        if S.Visual.Xray and (not xrayOn or xrayValue ~= S.Visual.XrayTransp) then
             applyXray()
         elseif not S.Visual.Xray and xrayOn then
             clearXray()
@@ -140,6 +161,7 @@ do
     -- Turns effects off rather than destroying them, so it is fully reversible.
     local detailSaved = {}
     local lowDetailOn = false
+    local waterSaved = nil
 
     local EFFECT_CLASSES = {
         ParticleEmitter = true, Trail = true, Smoke = true,
@@ -156,8 +178,15 @@ do
         saveLighting()
         Lighting.GlobalShadows = false
         pcall(function()
-            workspace.Terrain.WaterWaveSize = 0
-            workspace.Terrain.WaterReflectance = 0
+            local terrain = workspace.Terrain
+            if not waterSaved then
+                waterSaved = {
+                    size = terrain.WaterWaveSize,
+                    reflectance = terrain.WaterReflectance,
+                }
+            end
+            terrain.WaterWaveSize = 0
+            terrain.WaterReflectance = 0
         end)
         lowDetailOn = true
     end
@@ -167,6 +196,14 @@ do
             if obj.Parent then pcall(function() obj.Enabled = true end) end
         end
         detailSaved = {}
+        -- The water was flattened by hand, so it has to be put back by hand.
+        if waterSaved then
+            pcall(function()
+                workspace.Terrain.WaterWaveSize = waterSaved.size
+                workspace.Terrain.WaterReflectance = waterSaved.reflectance
+            end)
+            waterSaved = nil
+        end
         lowDetailOn = false
     end
     KH.undo(clearLowDetail)

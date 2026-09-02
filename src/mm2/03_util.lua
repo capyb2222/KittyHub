@@ -145,7 +145,18 @@ do
         return ok and key or nil
     end
 
+    -- Roblox's chat box and our own text fields are both TextBoxes. A key
+    -- held while one of them has focus belongs to whoever is typing, not to a
+    -- feature: without this, saying "we" in chat flies you across the map.
+    function U.typing()
+        local ok, box = pcall(function()
+            return KH.Services.UserInputService:GetFocusedTextBox()
+        end)
+        return ok and box ~= nil
+    end
+
     function U.keyHeld(name)
+        if U.typing() then return false end
         local key = U.keyCode(name)
         if not key then return false end
         return KH.Services.UserInputService:IsKeyDown(key)

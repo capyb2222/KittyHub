@@ -43,7 +43,7 @@ BANNER = """\
 """
 
 TITLES = {
-    "mm2": "Murder Mystery 2  ·  native Roblox UI, no Drawing API",
+    "mm2": "Murder Mystery 2 Script",
     "generic": "Universal fallback module",
 }
 

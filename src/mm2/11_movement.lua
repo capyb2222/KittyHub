@@ -81,9 +81,10 @@ do
     function Move.setNoclip(on)
         S.Move.Noclip = on
         if on then
+            -- Not KH.track: this is disconnected below and on unload, and
+            -- tracking it would add a dead entry on every single toggle.
             if not noclipConn then
                 noclipConn = RunService.Stepped:Connect(noclipStep)
-                KH.track(noclipConn)
             end
         else
             if noclipConn then
@@ -110,6 +111,7 @@ do
 
     KH.onFrame("bhop", function()
         if not S.Move.Bhop then return end
+        if U.typing() then return end
         if not UserInputService:IsKeyDown(Enum.KeyCode.Space) then return end
         local hum = U.myHum()
         if not hum then return end
@@ -179,6 +181,12 @@ do
 
         local cam = KH.camera()
         local direction = Vector3.zero
+        -- Hold still while typing rather than reading the chat as flight input.
+        if U.typing() then
+            flyVelocity.Velocity = Vector3.zero
+            flyGyro.CFrame = cam.CFrame
+            return
+        end
         if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + cam.CFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - cam.CFrame.LookVector end
         if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - cam.CFrame.RightVector end
