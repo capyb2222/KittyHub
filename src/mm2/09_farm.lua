@@ -18,8 +18,12 @@ do
     -- Coins that were touched but whose model has not despawned yet. Without
     -- this the farm re-targets the same coin forever.
     local claimed = {}
-    Game.on("RoundStart", function() claimed = {} end)
-    Game.on("RoundEnd", function() claimed = {} end)
+
+    -- The drop we already reacted to, so we never run at it twice.
+    local triedDrop = nil
+
+    Game.on("RoundStart", function() claimed = {} triedDrop = nil end)
+    Game.on("RoundEnd", function() claimed = {} triedDrop = nil end)
 
     -- ------------------------------------------------------------- collect
     local function touch(part)
@@ -128,7 +132,19 @@ do
     -- ========================================================= GUN GRABBING
     local grabbing = false
 
-    function Farm.grabGun(announce)
+    -- The murderer cannot pick the gun up, so anything short of a confident
+    -- "not the murderer" counts as a no.
+    local function blockedReason(strict)
+        if Game.amMurderer() then return "You are the murderer — that gun is not yours to take." end
+        if Game.gunTool() then return "You already have a gun." end
+        if not U.isAliveChar(LocalPlayer) then return "You are not alive." end
+        -- Automatic grabs only: a button press is the user's call, but nothing
+        -- moves on its own while we cannot prove what we are.
+        if strict and not Game.selfKnown() then return "Roles are not known yet — staying put." end
+        return nil
+    end
+
+    function Farm.grabGun(announce, strict)
         local drop = Game.GunDrop
         if not drop or not drop.Parent then
             if announce then
@@ -137,52 +153,73 @@ do
             return false
         end
         if grabbing then return false end
-        if Game.gunTool() then return false end -- already armed
 
-        -- The murderer cannot pick the gun up. Going anyway means teleporting
-        -- onto the sheriff's body seconds after killing them, standing there
-        -- while the pickup that will never happen times out, and teleporting
-        -- back — in front of whoever is watching.
-        if Game.amMurderer() then
+        local blocked = blockedReason(strict)
+        if blocked then
             if announce then
-                UI.notify({title = "Gun Drop", text = "You are the murderer — that gun is not yours to take.", kind = "warn"})
+                UI.notify({title = "Gun Drop", text = blocked, kind = "warn"})
             end
             return false
         end
 
         grabbing = true
         KH.detach(function()
-            local root = U.myRoot()
-            if root then
+            -- pcall, or one error leaves the flag stuck on forever.
+            pcall(function()
+                local root = U.myRoot()
+                if not root then return end
+
                 local origin = root.CFrame
                 root.CFrame = CFrame.new(drop.Position + Vector3.new(0, 2.5, 0))
 
-                -- Wait for the pickup to actually register before hopping back.
-                local began = os.clock()
-                repeat
+                -- Wait for the pickup, rechecking we may stand here at all.
+                local began, bailed = os.clock(), false
+                while true do
                     task.wait(0.08)
-                until Game.gunTool() or not drop.Parent or os.clock() - began > 2.5
-
-                if S.Farm.GrabReturn then
-                    local current = U.myRoot()
-                    if current then current.CFrame = origin end
+                    if Game.gunTool() or not drop.Parent then break end
+                    if os.clock() - began > 2.5 then break end
+                    if U.myRoot() ~= root or blockedReason(false) then
+                        bailed = true
+                        break
+                    end
                 end
 
-                if Game.gunTool() then
+                -- Same body only: never drag a fresh spawn to the old spot.
+                if U.myRoot() == root and (bailed or S.Farm.GrabReturn) then
+                    root.CFrame = origin
+                end
+
+                if not bailed and Game.gunTool() then
                     UI.notify({title = "Gun Drop", text = "Picked up the dropped gun.", kind = "good"})
                 end
-            end
+            end)
             grabbing = false
         end)
         return true
     end
 
-    Game.on("GunDropped", function()
+    Game.on("GunDropped", function(drop)
         UI.notify({title = "Gun Dropped", text = "The sheriff went down — gun is on the floor.", kind = "warn", duration = 5})
-        if S.Farm.AutoGrabGun then
+        if not S.Farm.AutoGrabGun then return end
+        if drop == triedDrop then return end
+        triedDrop = drop
+
+        -- Off the signal thread: a listener that yields stalls the rest.
+        KH.detach(function()
             task.wait(0.6) -- let the part settle where it lands
-            Farm.grabGun(false)
-        end
+
+            -- The murderer's thrown knife is in flight right now, so empty
+            -- hands are not proof of innocence — wait for the real roles.
+            local deadline = os.clock() + 4
+            while not Game.selfKnown() and os.clock() < deadline do
+                if Game.amMurderer() then return end
+                task.wait(0.2)
+            end
+
+            if not S.Farm.AutoGrabGun then return end
+            if not drop.Parent or Game.GunDrop ~= drop then return end
+            Farm.grabGun(false, true)
+        end)
     end)
 
     Game.on("GunTaken", function()

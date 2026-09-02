@@ -46,8 +46,8 @@ do
         return (pos - centre).Magnitude
     end
 
-    function Combat.pickTarget()
-        local mode = S.Aim.Target
+    function Combat.pickTarget(mode)
+        mode = mode or S.Aim.Target
 
         if mode == "Murderer" then
             local murderer = Game.murdererPlayer()
@@ -135,6 +135,7 @@ do
     do
         local GuiService = game:GetService("GuiService")
         local Players = KH.Services.Players
+        local UIS = KH.Services.UserInputService
 
         -- Plain globals; one the executor lacks reads back nil.
         local moveRel = type(mousemoverel) == "function" and mousemoverel or nil
@@ -155,6 +156,12 @@ do
 
         Mouse.CanMove = (moveRel ~= nil) or (moveAbs ~= nil) or (VIM ~= nil)
 
+        -- What a viewport pixel is worth to the cursor, and how long a frame of
+        -- the walk really takes. Both are measured rather than assumed, and both
+        -- are reported in the menu — a wrong one shows up there first.
+        local gain, samples = 1, 0
+        local stepTime = 1 / 60
+
         function Mouse.support()
             if not Mouse.CanMove then return "none — this executor cannot move the cursor" end
             local mover = moveRel and "mousemoverel"
@@ -164,7 +171,7 @@ do
                 or click and "mouse1click"
                 or VIM and "VirtualInputManager"
                 or "Tool:Activate"
-            return mover .. " + " .. clicker
+            return ("%s + %s · gain %.2f · %d ms"):format(mover, clicker, gain, stepTime * 1000)
         end
 
         local mouseObj
@@ -199,11 +206,9 @@ do
             return raw + offset, mouseObj
         end
 
-        -- What a viewport pixel is worth to the cursor. A relative move is in OS
-        -- pixels and the projection is in viewport pixels, and on a scaled
-        -- display those are not the same unit — so rather than assume, watch
+        -- A relative move is in OS pixels and the projection is in viewport
+        -- pixels, and on a scaled display those are not the same unit — so watch
         -- what the last move actually achieved and correct the next one.
-        local gain = 1
         local function learn(want, got)
             if not moveRel then return end
             if want.Magnitude < 8 or got.Magnitude < 2 then return end
@@ -212,7 +217,23 @@ do
             -- that into the gain is how the aim runs away.
             local ratio = want.Magnitude / got.Magnitude
             if ratio < 0.4 or ratio > 2.5 then return end
-            gain = U.clamp(gain * ratio, 0.5, 2)
+            -- Take the first couple of samples whole, since the first press of
+            -- a session has nothing better to go on, then ease: one noisy frame
+            -- swinging the next move is the cursor wandering instead of walking.
+            samples = samples + 1
+            gain = U.clamp(gain * (1 + (ratio - 1) * (samples <= 2 and 1 or 0.25)), 0.5, 2)
+        end
+
+        local function recalibrate()
+            gain, samples = 1, 0
+        end
+
+        -- The cursor's reported position only stops responding once it has left
+        -- the Roblox window, and it can only leave through an edge.
+        local function atBorder(point)
+            local view = KH.camera().ViewportSize
+            return point.X <= 8 or point.Y <= 8
+                or point.X >= view.X - 8 or point.Y >= view.Y - 8
         end
 
         -- Drag the cursor back inside the window. Once it is out there — put
@@ -293,17 +314,36 @@ do
         end
 
         local TOLERANCE = 4     -- pixel floor for "close enough"
-        local MAX_STEPS = 16
-        local LEAD      = 0.7   -- share of a frame's drift to aim ahead by
+        local NEAR_STUDS = 4.5  -- how far off them a landed ray may stop
+        local MAX_STEPS = 40
 
-        -- Where to point. Not Combat.aimPoint: prediction leads the target for
-        -- the remote route's flight and ping, and a client raycast has neither,
-        -- so the lead only walks the ray off the body — hardest on a falling
-        -- target, whose damped -Y velocity drags the aim metres underneath them.
-        local function livePoint(part)
-            return part.Position
+        -- Every lead below is counted in frames of the walk, so a 30 fps client
+        -- leads twice as far as a 144 fps one.
+        local function noteStep(dt)
+            if dt > 0 and dt < 0.2 then stepTime = stepTime + (dt - stepTime) * 0.2 end
+        end
+
+        -- Where the target will be in `lead` seconds. Nothing here has a
+        -- projectile to lead, but the cursor lags a frame behind the move that
+        -- put it there, the click lags a frame behind that, and the server
+        -- resolves the shot a ping later still — a running target crosses most
+        -- of their own body in that. Straight-line is enough: over a couple of
+        -- frames gravity moves a jumping target a fraction of a stud.
+        local function livePoint(part, lead)
+            if not lead or lead <= 0 then return part.Position end
+            local ok, velocity = pcall(function() return part.AssemblyLinearVelocity end)
+            if not ok or typeof(velocity) ~= "Vector3" then return part.Position end
+            return part.Position + velocity * lead
         end
         Mouse.livePoint = livePoint
+
+        -- Where the camera should be pointing for the shot to land. The lock
+        -- reads this too, so the turn and the shot never disagree about where
+        -- the target is going to be.
+        Mouse.Lead = 0
+        function Mouse.aimPoint(part)
+            return livePoint(part, Mouse.Lead)
+        end
 
         -- Where the target sits on screen right now, for the camera lock.
         function Mouse.screenOf(part)
@@ -323,108 +363,197 @@ do
 
         -- A press projects before the camera lock has had a frame to run, so a
         -- target who is off screen this instant may simply not have been turned
-        -- to yet. Give the lock a few frames before writing them off.
+        -- to yet. Give the lock time to bring them in, and no more than that:
+        -- the walk below is happy to chase a view that is still moving.
         local function waitVisible(part)
             local speed = U.clamp(S.Aim.MouseSpeed or 1, 0.1, 1)
-            for _ = 1, math.clamp(math.ceil(6 / speed), 6, 30) do
-                local _, onScreen = project(livePoint(part))
+            local deadline = os.clock() + U.clamp(0.2 / speed, 0.2, 0.7)
+            repeat
+                local _, onScreen = project(part.Position)
                 if onScreen then return true end
                 if not S.Aim.CameraSnap then return false end
                 task.wait()
-            end
+            until os.clock() >= deadline
             return false
         end
 
-        -- Walks the cursor onto the target and says whether it got there. Not
-        -- one jump: a relative move only lands next frame, and the target keeps
-        -- moving while we close on it.
-        local function pointAt(char, part)
-            if not waitVisible(part) then return false, "off screen" end
-            local speed = U.clamp(S.Aim.MouseSpeed or 1, 0.1, 1)
-            local steps = math.clamp(math.ceil(1 / speed), 1, MAX_STEPS)
-            local lastFrom, lastWant, lastPoint
-            local lastGap, worse, stuck = nil, 0, 0
+        -- First person and shift lock pin the cursor to the middle of the
+        -- screen, so there is no cursor to walk: the crosshair *is* the camera
+        -- and aiming is turning. This is the more exact of the two paths — no
+        -- display scale to learn, no readback to wait for, one rotation — but it
+        -- is only available when the lock is allowed to take the camera.
+        local function pointCamera(char, part)
+            if not S.Aim.CameraSnap then
+                return false, "cursor is locked — switch on Turn Camera to aim in first person"
+            end
 
-            for step = 1, MAX_STEPS do
+            Mouse.Lead = stepTime + (S.Aim.PingComp and U.clamp(U.ping() / 3000, 0, 0.06) or 0)
+            Mouse.Precise = true
+
+            local budget = os.clock() + 0.3
+            local reached, why = false, "could not turn onto them"
+
+            while true do
+                if not (char.Parent and part.Parent) then
+                    why = "target gone"
+                    break
+                end
+
+                -- The lock does the turning, on its own bind after Roblox's
+                -- camera module. Writing the camera from here as well would put
+                -- two authors on it in the same frame.
+                task.wait()
+
+                local point, onScreen = project(Mouse.aimPoint(part))
+                if onScreen then
+                    local view = KH.camera().ViewportSize
+                    local centre = Vector2.new(view.X / 2, view.Y / 2)
+                    local hit = select(2, cursor()).Target
+                    local onBody = hit and hit:IsDescendantOf(char)
+
+                    -- The cursor sits dead centre, so the distance from the
+                    -- centre to them is the whole aiming error.
+                    if onBody or (point - centre).Magnitude <= bodyRadius(part, point) * 0.75 then
+                        local blocker = not onBody and hit and hit:FindFirstAncestorOfClass("Model")
+                        local owner = blocker and Players:GetPlayerFromCharacter(blocker)
+                        if owner and owner ~= LocalPlayer then
+                            why = "holding fire — " .. owner.DisplayName .. " is in the line"
+                        else
+                            reached, why = true, hit and ("through " .. hit.Name) or "on target"
+                        end
+                        break
+                    end
+                end
+
+                if os.clock() > budget then break end
+            end
+
+            Mouse.Precise = false
+            Mouse.Lead = 0
+            return reached, why
+        end
+
+        -- Puts the cursor on the target and says whether it got there.
+        --
+        -- Nobody else can see your cursor — the camera turn is the only part of
+        -- this anyone else witnesses — so there is nothing to be gained by
+        -- easing it across the screen. It goes the whole way in one move, then
+        -- spends the frames after that correcting for what the move actually
+        -- achieved. That is both the fastest way there and the most exact.
+        local function pointAt(char, part)
+            -- No cursor to place: turn instead.
+            if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then
+                return pointCamera(char, part)
+            end
+            if not Mouse.CanMove then return false, "no mouse control" end
+            if not waitVisible(part) then return false, "off screen" end
+
+            local budget = os.clock() + 0.3
+            -- The click lands a frame after the cursor does, and MM2 casts its
+            -- own ray then rather than now.
+            local pingLead = S.Aim.PingComp and U.clamp(U.ping() / 3000, 0, 0.06) or 0
+            local lastFrom, lastWant, stuck = nil, nil, 0
+            local tick = os.clock()
+            local grazed = false
+
+            for _ = 1, MAX_STEPS do
                 if not (char.Parent and part.Parent) then return false, "target gone" end
+
+                local mark = os.clock()
+                if lastWant then noteStep(mark - tick) end
+                tick = mark
 
                 local here, m = cursor()
 
-                -- Asked it to move and it did not. That means the cursor is
-                -- outside the Roblox window, where its reported position stops
-                -- changing — so every later move would be computed from a
-                -- position that is no longer real. Sweep it back in, throw away
-                -- the calibration that put it there, and start the walk over.
-                local recovering = false
-                if lastWant and lastWant.Magnitude >= 8 and (here - lastFrom).Magnitude < 1 then
-                    stuck = stuck + 1
-                    if stuck >= 2 then
-                        stuck, gain = 0, 1
-                        lastFrom, lastWant, lastPoint, lastGap = nil, nil, nil, nil
-                        if not sweepHome(here) then return false, "cursor is off the window" end
-                        recovering = true
+                -- The last move has not shown up yet. Issuing another on top of
+                -- it is how the cursor overshoots and has to come back — wait
+                -- for it to land instead. Against an edge it means something
+                -- else: the cursor is outside the window, where its reported
+                -- position stops changing at all, and only a sweep inwards gets
+                -- it back.
+                if lastWant and lastWant.Magnitude >= 4 and (here - lastFrom).Magnitude < 1 then
+                    if atBorder(here) then
+                        stuck = stuck + 1
+                        if stuck >= 2 then
+                            stuck = 0
+                            recalibrate()
+                            lastFrom, lastWant = nil, nil
+                            if not sweepHome(here) then return false, "cursor is off the window" end
+                        end
                     end
-                else
-                    stuck = 0
-                end
-
-                if recovering then
                     task.wait()
                 else
-                    -- The camera belongs to the lock below; two writers a frame
-                    -- is how the cursor ends up chasing a point that moves.
-                    local point, onScreen = project(livePoint(part))
+                    stuck = 0
+
+                    local now, onScreen = project(part.Position)
                     if not onScreen then return false, "off screen" end
 
                     if lastWant then learn(lastWant, here - lastFrom) end
 
-                    -- Walking away from the target three steps running means
-                    -- the calibration is wrong rather than the aim. Drop it and
-                    -- start over instead of chasing the cursor round the screen.
-                    local gap = (point - here).Magnitude
-                    if lastGap and gap > lastGap + 2 then
-                        worse = worse + 1
-                        if worse >= 3 then
-                            gain = 1
-                            return false, "cursor ran away — recalibrated"
-                        end
-                    else
-                        worse = 0
+                    -- Two questions, and for anyone moving they have different
+                    -- answers. Where must the ray land? Where they will be when
+                    -- the click is processed, a frame from now. Where must the
+                    -- cursor be sent? Where they will be once *this* move has
+                    -- landed, a frame later again. Never past their body edge
+                    -- either way: MM2 shoots wherever the cursor's ray stops, so
+                    -- a lead that overshoots them sends the wall behind instead.
+                    local radius = bodyRadius(part, now)
+                    local function ahead(seconds)
+                        local point, ok = project(livePoint(part, seconds))
+                        if not ok then return now end
+                        local drift = point - now
+                        local cap = radius * 0.8
+                        if drift.Magnitude > cap then drift = drift.Unit * cap end
+                        return now + drift
                     end
-                    lastGap = gap
 
-                    -- Being on their body is the test that matters. The pixel
-                    -- distance is the fallback for when something in front of
-                    -- them owns the cursor's ray.
+                    local hitPoint = ahead(stepTime + pingLead)
+                    local sendTo   = ahead(stepTime * 2 + pingLead)
+                    -- Against where the shot has to land, not where the next
+                    -- move is going: the cursor is already a frame ahead, and
+                    -- measuring it against the frame after that left a running
+                    -- target permanently one step out of reach.
+                    local gap = (hitPoint - here).Magnitude
+                    local spent = os.clock() >= budget
+
+                    -- The ray hitting them proves where they were a frame ago,
+                    -- which is the whole answer for someone standing still and
+                    -- worth nothing against someone crossing.
                     local hit = m.Target
-                    if hit and hit:IsDescendantOf(char) then return true, "on target" end
-                    if gap <= bodyRadius(part, point) then
+                    local onBody = hit and hit:IsDescendantOf(char)
+                    local settled = (hitPoint - now).Magnitude <= radius * 0.3
+                    local close = gap <= math.max(TOLERANCE, radius * 0.7)
+                        or (spent and gap <= radius)
+
+                    -- Pixels lie. A cursor within a body width of their centre
+                    -- can still be a ray that slips past them into the scenery
+                    -- twenty studs behind, and MM2 sends wherever the ray
+                    -- stops, so that is what has to be near them -- in studs.
+                    local lands = onBody and settled
+                    if not lands and close then
+                        local reach, at = pcall(function() return m.Hit.Position end)
+                        lands = reach
+                            and (at - livePoint(part, stepTime)).Magnitude <= NEAR_STUDS
+                        if not lands then grazed = true end
+                    end
+
+                    if lands then
                         -- MM2 shoots where the cursor's ray stops. A wall costs
                         -- a wasted shot, but another player standing in the line
                         -- costs the round: a sheriff who shoots an innocent dies
                         -- for it. Hold fire and let the next press try again.
-                        local blocker = hit and hit:FindFirstAncestorOfClass("Model")
+                        local blocker = not onBody and hit and hit:FindFirstAncestorOfClass("Model")
                         local owner = blocker and Players:GetPlayerFromCharacter(blocker)
                         if owner and owner ~= LocalPlayer then
                             return false, "holding fire — " .. owner.DisplayName .. " is in the line"
                         end
                         return true, hit and ("through " .. hit.Name) or "on target"
                     end
+                    if spent then break end
 
-                    -- Aim where they will be once this move lands, not where
-                    -- they were when it was projected: without this the cursor
-                    -- trails a running target forever. Short of a full frame,
-                    -- though — while the camera is easing the drift is slowing
-                    -- down, and leading it in full overshoots and comes back.
-                    local aim = lastPoint and (point + (point - lastPoint) * LEAD) or point
-                    lastPoint = point
-
-                    -- A fixed fraction of the gap never arrives; a share of the
-                    -- steps left arrives exactly on the last one.
-                    local left = math.max(1, steps - step + 1)
-                    local dest = clampToView(here + (aim - here) / left)
-                    -- Learn against what was actually asked for, which is the
-                    -- clamped move, not the one we would have liked to make.
+                    -- The whole way, every time. What the move does not achieve
+                    -- is measured next frame and taken off the one after.
+                    local dest = clampToView(sendTo)
                     lastFrom, lastWant = here, dest - here
                     if not moveTo(here, dest) then
                         return false, "no mouse control"
@@ -432,7 +561,13 @@ do
                     task.wait()
                 end
             end
-            gain = 1
+            -- On them by the pixels every time and never by the ray: they are
+            -- behind something, and the shot would go into whatever that is.
+            if grazed then return false, "the shot would land behind them" end
+
+            -- Never got there: the scale it is moving by is the thing most
+            -- likely wrong, so the next press starts from a clean one.
+            recalibrate()
             return false, "could not reach"
         end
 
@@ -446,7 +581,11 @@ do
         -- would otherwise have a dozen of them fighting over the cursor.
         function Mouse.fire(player, char, part, force)
             if busy then return false, "aiming" end
-            if not Mouse.CanMove then return false, "no mouse control" end
+            -- A locked cursor is aimed by turning, which needs no mouse mover
+            -- at all — only something to click with.
+            if UIS.MouseBehavior == Enum.MouseBehavior.Default and not Mouse.CanMove then
+                return false, "no mouse control"
+            end
 
             local now = os.clock()
             if not force and now - lastShot < S.Aim.FireRate then return false, "cooldown" end
@@ -455,23 +594,50 @@ do
             activePart = part
 
             local function sequence()
+                local dry = S.Aim.DryRun
+
+                -- Draw the gun and walk at the same time rather than one after
+                -- the other: EquipTool takes a frame or two, and so does the
+                -- walk, so waiting for the first before starting the second
+                -- doubled the time from the key press to the shot.
                 local gun, equipped = Game.gunTool()
-                if gun and not equipped then
-                    -- The click needs a gun that is actually out, and EquipTool
-                    -- does not land in the same frame.
-                    Game.equip(gun)
-                    local began = os.clock()
-                    while not select(2, Game.gunTool()) and os.clock() - began < 0.35 do
-                        task.wait()
-                    end
-                end
+                if gun and not equipped and not dry then Game.equip(gun) end
 
                 local reached, why = pointAt(char, part)
                 if not reached then
-                    Combat.LastResult = "mouse aim — " .. why
+                    Combat.LastResult = (dry and "aim test — " or "mouse aim — ") .. why
                     -- No shot went out; do not charge the next one a cooldown.
                     lastShot = 0
+                    -- A press that quietly does nothing looks like a dead key.
+                    if force then
+                        UI.notify({title = dry and "Aim Test" or "Aimbot", text = why, kind = "warn", duration = 2})
+                    end
                     return
+                end
+
+                -- Aim test: say where the cursor actually ended up. The point
+                -- under it is the one MM2 would have sent, so its distance to
+                -- them is the whole truth about whether the shot would land.
+                if dry then
+                    local _, m = cursor()
+                    local ok, at = pcall(function() return m.Hit.Position end)
+                    local speed = 0
+                    pcall(function() speed = part.AssemblyLinearVelocity.Magnitude end)
+                    local text = ok
+                        and ("%.1f studs off %s, who was doing %.0f studs/s (%s)"):format(
+                            (at - part.Position).Magnitude, player.DisplayName, speed, why)
+                        or "could not read where the cursor landed"
+                    Combat.LastResult = "aim test — " .. text
+                    if force then
+                        UI.notify({title = "Aim Test", text = text, duration = 4})
+                    end
+                    return
+                end
+
+                -- The click still needs the gun actually out.
+                local began = os.clock()
+                while not select(2, Game.gunTool()) and os.clock() - began < 0.25 do
+                    task.wait()
                 end
 
                 Mouse.Firing = true
@@ -479,6 +645,9 @@ do
                 Combat.LastResult = sent
                     and ("mouse shot at " .. player.DisplayName .. " — " .. why)
                     or "cursor on target but the click went nowhere"
+                if force and not sent then
+                    UI.notify({title = "Aimbot", text = "the click went nowhere", kind = "bad", duration = 2})
+                end
             end
 
             KH.detach(function()
@@ -487,6 +656,8 @@ do
                 -- silent-aim handler ignore every real click.
                 local ok, err = pcall(sequence)
                 Mouse.Firing = false
+                Mouse.Precise = false
+                Mouse.Lead = 0
                 activePart = nil
                 busy = false
                 if not ok then Combat.LastResult = "mouse aim error: " .. tostring(err) end
@@ -497,16 +668,33 @@ do
 
     -- Fires once at the current best target. Returns true when a shot went out.
     function Combat.fireOnce(force)
+        -- A key press that does nothing at all is the most confusing thing this
+        -- can do, so say why. Only for a real press: the render loop calls this
+        -- every frame and would notify every frame with it.
+        local function refuse(reason)
+            Combat.LastResult = reason
+            if force then
+                UI.notify({title = "Aimbot", text = reason, kind = "warn", duration = 2})
+            end
+            return false, reason
+        end
+
+        -- An aim test needs no gun: it is checking where the cursor lands, and
+        -- waiting to roll sheriff to find that out is most of a round each try.
         local gun = Game.gunTool()
-        if not gun then
-            Combat.LastResult = "no gun — you are not holding one"
-            return false, "no gun"
+        if not gun and not S.Aim.DryRun then
+            return refuse("no gun — you are not holding one")
         end
 
         local player, char, part = Combat.pickTarget()
+        if not player and S.Aim.DryRun then
+            -- Anyone will do when nothing is going to be fired at them.
+            player, char, part = Combat.pickTarget("Nearest")
+        end
         if not player then
-            Combat.LastResult = "no target"
-            return false, "no target"
+            return refuse(S.Aim.Target == "Murderer"
+                and "no target — the murderer is not known yet"
+                or "no target")
         end
         Combat.LastTarget = player
 
@@ -523,7 +711,12 @@ do
                 Combat.LastResult = tostring(err)
             end
         end
-        if not ok then return false, err end
+        -- A cooldown is the fire rate doing its job, not a failure worth saying
+        -- out loud; everything else here means the press went nowhere.
+        if not ok then
+            if err == "cooldown" then return false, err end
+            return refuse(tostring(err))
+        end
 
         if S.Aim.NotifyShot then
             UI.notify({title = "Shot", text = "Fired at " .. player.DisplayName, duration = 1.5})
@@ -590,13 +783,19 @@ do
                 part = picked
             end
             -- Last, because it is the only test that walks the character.
-            if part and Game.gunTool() then return part end
+            if part and (Game.gunTool() or S.Aim.DryRun) then return part end
             return nil
         end
 
         local function lockCamera(dt)
             local part = lockTarget()
-            if part then
+            -- A shot with a locked cursor is aimed entirely by this: it has to
+            -- land exactly on the target rather than ease towards it, and it
+            -- cannot stop early for being comfortably inside the view.
+            local precise = part ~= nil and Combat.Mouse.Precise
+            if precise then
+                turning = true
+            elseif part then
                 -- Turn only when there is something to turn for: a target
                 -- already well inside the view needs no camera work at all,
                 -- and a view that stays still is both smoother and far less
@@ -625,7 +824,8 @@ do
             held = CFrame.new(cam.CFrame.Position) * (held or cam.CFrame).Rotation
 
             if turning then
-                held = held:Lerp(CFrame.new(cam.CFrame.Position, Combat.Mouse.livePoint(part)), alpha)
+                local want = CFrame.new(cam.CFrame.Position, Combat.Mouse.aimPoint(part))
+                held = precise and want or held:Lerp(want, alpha)
                 cam.CFrame = held
                 return
             end

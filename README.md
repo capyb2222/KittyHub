@@ -1,6 +1,10 @@
-# Kitty Hub
+<p align="center">
+  <img src="logo.png" alt="Kitty Hub" width="170">
+</p>
 
-Messy MM2 script. Many features are broken, so see what works for you.
+<h1 align="center">Kitty Hub</h1>
+
+<p align="center">Messy MM2 script. Many features are broken, so see what works for you.</p>
 
 
 ## Loadstring

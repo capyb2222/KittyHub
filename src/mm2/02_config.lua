@@ -20,13 +20,14 @@ do
             Key           = "C",
             Method        = "Mouse",     -- Remote | Mouse
             CameraSnap    = true,        -- Mouse method: face the target first
-            MouseSpeed    = 0.4,         -- 1 snaps, lower eases the turn and walk
+            MouseSpeed    = 0.6,         -- camera turn only; the cursor always snaps
             Prediction    = 2.8,         -- studs of lead per unit of velocity
             PingComp      = true,        -- scale lead by measured ping
             FireRate      = 0.10,        -- seconds between shots
             KeepEquipped  = true,        -- re-draw the gun if it gets stowed
             SilentAim     = false,       -- redirect your own manual shots
             SilentMode    = "Auto",      -- Auto | Hook | Takeover | Click
+            DryRun        = false,       -- aim and report, never shoot
             AimAtHead     = false,       -- Head instead of HumanoidRootPart
             NotifyShot    = false,
         },

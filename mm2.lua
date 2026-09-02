@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Murder Mystery 2  ·  native Roblox UI, no Drawing API
---   build 3.0.0+c3810c94  ·  2026-09-01 03:54 UTC
+--   build 3.0.0+b0d5200b  ·  2026-09-02 04:50 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
@@ -195,13 +195,14 @@ do
             Key           = "C",
             Method        = "Mouse",     -- Remote | Mouse
             CameraSnap    = true,        -- Mouse method: face the target first
-            MouseSpeed    = 0.4,         -- 1 snaps, lower eases the turn and walk
+            MouseSpeed    = 0.6,         -- camera turn only; the cursor always snaps
             Prediction    = 2.8,         -- studs of lead per unit of velocity
             PingComp      = true,        -- scale lead by measured ping
             FireRate      = 0.10,        -- seconds between shots
             KeepEquipped  = true,        -- re-draw the gun if it gets stowed
             SilentAim     = false,       -- redirect your own manual shots
             SilentMode    = "Auto",      -- Auto | Hook | Takeover | Click
+            DryRun        = false,       -- aim and report, never shoot
             AimAtHead     = false,       -- Head instead of HumanoidRootPart
             NotifyShot    = false,
         },
@@ -673,12 +674,28 @@ do
     end
 
     -- --------------------------------------------------------- role tracking
-    local function applyData(data)
-        if typeof(data) ~= "table" then return end
-        Game.Data = data
+    -- Our own role is latched for the round. MM2 empties our hands the moment
+    -- the knife is thrown and the role table can arrive late, in pieces, or
+    -- still holding last round's answer — one unlucky read must never turn the
+    -- murderer back into an innocent.
+    local myLatch = nil
 
+    local function latch(role)
+        if role == "Murderer" or role == "Sheriff" or role == "Hero" then
+            myLatch = role
+        end
+    end
+
+    local function clearRoles()
+        Game.Data = {}
+        Game.Murderer, Game.Sheriff, Game.Hero = nil, nil, nil
+        myLatch = nil
+    end
+    Game.clearRoles = clearRoles
+
+    local function recompute()
         local murderer, sheriff, hero
-        for name, entry in pairs(data) do
+        for name, entry in pairs(Game.Data) do
             if typeof(entry) == "table" then
                 local role = entry.Role
                 if role == "Murderer" then murderer = name
@@ -692,9 +709,43 @@ do
             or (hero ~= Game.Hero)
 
         Game.Murderer, Game.Sheriff, Game.Hero = murderer, sheriff, hero
+
+        local me = LocalPlayer.Name
+        if murderer == me then latch("Murderer")
+        elseif sheriff == me then latch("Sheriff")
+        elseif hero == me then latch("Hero") end
+
         if changed then emit("RoleChange", murderer, sheriff, hero) end
     end
+
+    -- Only a payload that actually carries roles may replace what we have; a
+    -- partial push used to wipe the table and leave us knowing nothing.
+    local function applyData(data)
+        if typeof(data) ~= "table" then return end
+
+        local fresh, roles = {}, 0
+        for name, entry in pairs(data) do
+            if typeof(name) == "string" and typeof(entry) == "table" then
+                fresh[name] = entry
+                if typeof(entry.Role) == "string" then roles = roles + 1 end
+            end
+        end
+        if roles == 0 then return end
+
+        Game.Data = fresh
+        recompute()
+    end
     Game.applyData = applyData
+
+    -- Some builds push one player's entry instead of the whole table.
+    local function applyOne(who, entry)
+        local name = who
+        if typeof(who) == "Instance" and who:IsA("Player") then name = who.Name end
+        if typeof(name) ~= "string" or typeof(entry) ~= "table" then return end
+        if typeof(entry.Role) ~= "string" then return end
+        Game.Data[name] = entry
+        recompute()
+    end
 
     function Game.refreshRoles()
         local remote = findRemote("GetPlayerData")
@@ -712,15 +763,11 @@ do
     KH.spawn(function()
         local gameplay = findRemote("PlayerDataChanged")
         if gameplay and gameplay:IsA("RemoteEvent") then
-            KH.track(gameplay.OnClientEvent:Connect(applyData))
+            KH.track(gameplay.OnClientEvent:Connect(function(first, second)
+                if typeof(first) == "table" then applyData(first) else applyOne(first, second) end
+            end))
         end
         Game.refreshRoles()
-    end)
-
-    -- Poll as a safety net: the push event is the fast path, but if it is ever
-    -- renamed we still recover roles within a couple of seconds.
-    KH.loop(2, function()
-        if not Game.Murderer then Game.refreshRoles() end
     end)
 
     -- ------------------------------------------------- tool-based fallback
@@ -761,10 +808,12 @@ do
         local role = entry and entry.Role or nil
         local held = cachedToolRole(player)
 
+        -- Only the murderer ever holds a knife, so that outranks the table —
+        -- including a table left standing from the round before.
+        if held == "Murderer" then return "Murderer" end
+
         if role == nil or role == "Innocent" then
-            if held == "Murderer" then
-                role = "Murderer"
-            elseif held == "Sheriff" then
+            if held == "Sheriff" then
                 -- An innocent holding a gun picked it up off a dead sheriff.
                 role = (role == "Innocent") and "Hero" or "Sheriff"
             end
@@ -787,12 +836,52 @@ do
         return U.isAliveChar(player)
     end
 
-    function Game.myRole() return Game.roleOf(LocalPlayer) end
+    function Game.myRole()
+        local role = Game.roleOf(LocalPlayer)
+        latch(role)
+        if role == "Innocent" and myLatch then return myLatch end
+        return role
+    end
+
     function Game.amSheriff()
         local role = Game.myRole()
         return role == "Sheriff" or role == "Hero"
     end
-    function Game.amMurderer() return Game.myRole() == "Murderer" end
+
+    -- Asked from every angle: a wrong "no" walks the murderer onto the gun.
+    function Game.amMurderer()
+        if myLatch == "Murderer" then return true end
+        if Game.Murderer == LocalPlayer.Name then return true end
+        if Game.knifeTool() then return true end
+        return Game.myRole() == "Murderer"
+    end
+
+    -- Lets callers tell "innocent" apart from "no idea yet".
+    function Game.selfKnown()
+        if myLatch then return true end
+        local entry = Game.Data[LocalPlayer.Name]
+        return typeof(entry) == "table" and typeof(entry.Role) == "string"
+    end
+
+    -- Latch our role even when nothing asks: the knife is only ours briefly.
+    KH.loop(0.5, function() Game.myRole() end)
+
+    -- Poll until we know who the murderer is *and* what we are, then keep
+    -- re-asking slowly: a missed round boundary would otherwise leave last
+    -- round's roles standing for the whole of this one.
+    local polledAt = 0
+    KH.loop(2, function()
+        if Game.Murderer and Game.selfKnown() and os.clock() - polledAt < 10 then return end
+        polledAt = os.clock()
+        Game.refreshRoles()
+    end)
+
+    -- A fresh body means a fresh round; stale roles are worse than none.
+    KH.track(LocalPlayer.CharacterAdded:Connect(function()
+        clearRoles()
+        task.wait(1)
+        Game.refreshRoles()
+    end))
 
     -- Resolve names to live Player objects, skipping the dead.
     local function playerByName(name, requireAlive)
@@ -944,14 +1033,15 @@ do
         if obj.Parent == workspace and obj.Name ~= "Lobby" and isMapModel(obj) then
             Game.Traps = {}
             Game.GunDrop = nil
+            clearRoles()
             emit("RoundStart", obj)
+            KH.detach(Game.refreshRoles)
         end
     end))
 
     KH.track(workspace.ChildRemoved:Connect(function(obj)
         if obj.Name ~= "Lobby" and obj:FindFirstChild("CoinContainer") then
-            Game.Data = {}
-            Game.Murderer, Game.Sheriff, Game.Hero = nil, nil, nil
+            clearRoles()
             Game.Traps = {}
             Game.GunDrop = nil
             emit("RoundEnd")
@@ -1557,7 +1647,6 @@ do
             entry.page.Visible = on
             tween(entry.button, 0.14, {BackgroundTransparency = on and 0.86 or 1})
             tween(entry.label, 0.14, {TextColor3 = on and C.Text or C.TextDim})
-            tween(entry.icon, 0.14, {TextTransparency = on and 0 or 0.35})
         end
         indicator.Visible = true
         tween(indicator, 0.2, {
@@ -1566,7 +1655,7 @@ do
         }, Enum.EasingStyle.Back)
     end
 
-    function UI.addTab(name, icon)
+    function UI.addTab(name)
         tabOrder = tabOrder + 1
         local button = make("TextButton", {
             Name = name,
@@ -1582,25 +1671,14 @@ do
         UI.corner(button, 7)
         UI.accented(button, "BackgroundColor3")
 
-        local iconLabel = make("TextLabel", {
-            Text = icon or "•",
-            Font = Enum.Font.GothamBold,
-            TextSize = 13,
-            TextColor3 = C.Text,
-            TextTransparency = 0.35,
-            BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(9, 0),
-            Size = UDim2.fromOffset(20, 34),
-            Parent = button,
-        })
         local textLabel = make("TextLabel", {
             Text = name,
             Font = Enum.Font.GothamMedium,
             TextSize = 13,
             TextColor3 = C.TextDim,
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(32, 0),
-            Size = UDim2.new(1, -38, 1, 0),
+            Position = UDim2.fromOffset(15, 0),
+            Size = UDim2.new(1, -21, 1, 0),
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = button,
         })
@@ -1622,7 +1700,7 @@ do
         UI.list(page, 10)
         UI.pad(page, 0, 2, 16, 14, 14)
 
-        local tab = {name = name, button = button, page = page, label = textLabel, icon = iconLabel, sections = {}}
+        local tab = {name = name, button = button, page = page, label = textLabel, sections = {}}
         tabs[name] = tab
 
         button.MouseEnter:Connect(function()
@@ -3275,8 +3353,8 @@ do
         return (pos - centre).Magnitude
     end
 
-    function Combat.pickTarget()
-        local mode = S.Aim.Target
+    function Combat.pickTarget(mode)
+        mode = mode or S.Aim.Target
 
         if mode == "Murderer" then
             local murderer = Game.murdererPlayer()
@@ -3364,6 +3442,7 @@ do
     do
         local GuiService = game:GetService("GuiService")
         local Players = KH.Services.Players
+        local UIS = KH.Services.UserInputService
 
         -- Plain globals; one the executor lacks reads back nil.
         local moveRel = type(mousemoverel) == "function" and mousemoverel or nil
@@ -3384,6 +3463,12 @@ do
 
         Mouse.CanMove = (moveRel ~= nil) or (moveAbs ~= nil) or (VIM ~= nil)
 
+        -- What a viewport pixel is worth to the cursor, and how long a frame of
+        -- the walk really takes. Both are measured rather than assumed, and both
+        -- are reported in the menu — a wrong one shows up there first.
+        local gain, samples = 1, 0
+        local stepTime = 1 / 60
+
         function Mouse.support()
             if not Mouse.CanMove then return "none — this executor cannot move the cursor" end
             local mover = moveRel and "mousemoverel"
@@ -3393,7 +3478,7 @@ do
                 or click and "mouse1click"
                 or VIM and "VirtualInputManager"
                 or "Tool:Activate"
-            return mover .. " + " .. clicker
+            return ("%s + %s · gain %.2f · %d ms"):format(mover, clicker, gain, stepTime * 1000)
         end
 
         local mouseObj
@@ -3428,11 +3513,9 @@ do
             return raw + offset, mouseObj
         end
 
-        -- What a viewport pixel is worth to the cursor. A relative move is in OS
-        -- pixels and the projection is in viewport pixels, and on a scaled
-        -- display those are not the same unit — so rather than assume, watch
+        -- A relative move is in OS pixels and the projection is in viewport
+        -- pixels, and on a scaled display those are not the same unit — so watch
         -- what the last move actually achieved and correct the next one.
-        local gain = 1
         local function learn(want, got)
             if not moveRel then return end
             if want.Magnitude < 8 or got.Magnitude < 2 then return end
@@ -3441,7 +3524,23 @@ do
             -- that into the gain is how the aim runs away.
             local ratio = want.Magnitude / got.Magnitude
             if ratio < 0.4 or ratio > 2.5 then return end
-            gain = U.clamp(gain * ratio, 0.5, 2)
+            -- Take the first couple of samples whole, since the first press of
+            -- a session has nothing better to go on, then ease: one noisy frame
+            -- swinging the next move is the cursor wandering instead of walking.
+            samples = samples + 1
+            gain = U.clamp(gain * (1 + (ratio - 1) * (samples <= 2 and 1 or 0.25)), 0.5, 2)
+        end
+
+        local function recalibrate()
+            gain, samples = 1, 0
+        end
+
+        -- The cursor's reported position only stops responding once it has left
+        -- the Roblox window, and it can only leave through an edge.
+        local function atBorder(point)
+            local view = KH.camera().ViewportSize
+            return point.X <= 8 or point.Y <= 8
+                or point.X >= view.X - 8 or point.Y >= view.Y - 8
         end
 
         -- Drag the cursor back inside the window. Once it is out there — put
@@ -3522,17 +3621,36 @@ do
         end
 
         local TOLERANCE = 4     -- pixel floor for "close enough"
-        local MAX_STEPS = 16
-        local LEAD      = 0.7   -- share of a frame's drift to aim ahead by
+        local NEAR_STUDS = 4.5  -- how far off them a landed ray may stop
+        local MAX_STEPS = 40
 
-        -- Where to point. Not Combat.aimPoint: prediction leads the target for
-        -- the remote route's flight and ping, and a client raycast has neither,
-        -- so the lead only walks the ray off the body — hardest on a falling
-        -- target, whose damped -Y velocity drags the aim metres underneath them.
-        local function livePoint(part)
-            return part.Position
+        -- Every lead below is counted in frames of the walk, so a 30 fps client
+        -- leads twice as far as a 144 fps one.
+        local function noteStep(dt)
+            if dt > 0 and dt < 0.2 then stepTime = stepTime + (dt - stepTime) * 0.2 end
+        end
+
+        -- Where the target will be in `lead` seconds. Nothing here has a
+        -- projectile to lead, but the cursor lags a frame behind the move that
+        -- put it there, the click lags a frame behind that, and the server
+        -- resolves the shot a ping later still — a running target crosses most
+        -- of their own body in that. Straight-line is enough: over a couple of
+        -- frames gravity moves a jumping target a fraction of a stud.
+        local function livePoint(part, lead)
+            if not lead or lead <= 0 then return part.Position end
+            local ok, velocity = pcall(function() return part.AssemblyLinearVelocity end)
+            if not ok or typeof(velocity) ~= "Vector3" then return part.Position end
+            return part.Position + velocity * lead
         end
         Mouse.livePoint = livePoint
+
+        -- Where the camera should be pointing for the shot to land. The lock
+        -- reads this too, so the turn and the shot never disagree about where
+        -- the target is going to be.
+        Mouse.Lead = 0
+        function Mouse.aimPoint(part)
+            return livePoint(part, Mouse.Lead)
+        end
 
         -- Where the target sits on screen right now, for the camera lock.
         function Mouse.screenOf(part)
@@ -3552,108 +3670,197 @@ do
 
         -- A press projects before the camera lock has had a frame to run, so a
         -- target who is off screen this instant may simply not have been turned
-        -- to yet. Give the lock a few frames before writing them off.
+        -- to yet. Give the lock time to bring them in, and no more than that:
+        -- the walk below is happy to chase a view that is still moving.
         local function waitVisible(part)
             local speed = U.clamp(S.Aim.MouseSpeed or 1, 0.1, 1)
-            for _ = 1, math.clamp(math.ceil(6 / speed), 6, 30) do
-                local _, onScreen = project(livePoint(part))
+            local deadline = os.clock() + U.clamp(0.2 / speed, 0.2, 0.7)
+            repeat
+                local _, onScreen = project(part.Position)
                 if onScreen then return true end
                 if not S.Aim.CameraSnap then return false end
                 task.wait()
-            end
+            until os.clock() >= deadline
             return false
         end
 
-        -- Walks the cursor onto the target and says whether it got there. Not
-        -- one jump: a relative move only lands next frame, and the target keeps
-        -- moving while we close on it.
-        local function pointAt(char, part)
-            if not waitVisible(part) then return false, "off screen" end
-            local speed = U.clamp(S.Aim.MouseSpeed or 1, 0.1, 1)
-            local steps = math.clamp(math.ceil(1 / speed), 1, MAX_STEPS)
-            local lastFrom, lastWant, lastPoint
-            local lastGap, worse, stuck = nil, 0, 0
+        -- First person and shift lock pin the cursor to the middle of the
+        -- screen, so there is no cursor to walk: the crosshair *is* the camera
+        -- and aiming is turning. This is the more exact of the two paths — no
+        -- display scale to learn, no readback to wait for, one rotation — but it
+        -- is only available when the lock is allowed to take the camera.
+        local function pointCamera(char, part)
+            if not S.Aim.CameraSnap then
+                return false, "cursor is locked — switch on Turn Camera to aim in first person"
+            end
 
-            for step = 1, MAX_STEPS do
+            Mouse.Lead = stepTime + (S.Aim.PingComp and U.clamp(U.ping() / 3000, 0, 0.06) or 0)
+            Mouse.Precise = true
+
+            local budget = os.clock() + 0.3
+            local reached, why = false, "could not turn onto them"
+
+            while true do
+                if not (char.Parent and part.Parent) then
+                    why = "target gone"
+                    break
+                end
+
+                -- The lock does the turning, on its own bind after Roblox's
+                -- camera module. Writing the camera from here as well would put
+                -- two authors on it in the same frame.
+                task.wait()
+
+                local point, onScreen = project(Mouse.aimPoint(part))
+                if onScreen then
+                    local view = KH.camera().ViewportSize
+                    local centre = Vector2.new(view.X / 2, view.Y / 2)
+                    local hit = select(2, cursor()).Target
+                    local onBody = hit and hit:IsDescendantOf(char)
+
+                    -- The cursor sits dead centre, so the distance from the
+                    -- centre to them is the whole aiming error.
+                    if onBody or (point - centre).Magnitude <= bodyRadius(part, point) * 0.75 then
+                        local blocker = not onBody and hit and hit:FindFirstAncestorOfClass("Model")
+                        local owner = blocker and Players:GetPlayerFromCharacter(blocker)
+                        if owner and owner ~= LocalPlayer then
+                            why = "holding fire — " .. owner.DisplayName .. " is in the line"
+                        else
+                            reached, why = true, hit and ("through " .. hit.Name) or "on target"
+                        end
+                        break
+                    end
+                end
+
+                if os.clock() > budget then break end
+            end
+
+            Mouse.Precise = false
+            Mouse.Lead = 0
+            return reached, why
+        end
+
+        -- Puts the cursor on the target and says whether it got there.
+        --
+        -- Nobody else can see your cursor — the camera turn is the only part of
+        -- this anyone else witnesses — so there is nothing to be gained by
+        -- easing it across the screen. It goes the whole way in one move, then
+        -- spends the frames after that correcting for what the move actually
+        -- achieved. That is both the fastest way there and the most exact.
+        local function pointAt(char, part)
+            -- No cursor to place: turn instead.
+            if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then
+                return pointCamera(char, part)
+            end
+            if not Mouse.CanMove then return false, "no mouse control" end
+            if not waitVisible(part) then return false, "off screen" end
+
+            local budget = os.clock() + 0.3
+            -- The click lands a frame after the cursor does, and MM2 casts its
+            -- own ray then rather than now.
+            local pingLead = S.Aim.PingComp and U.clamp(U.ping() / 3000, 0, 0.06) or 0
+            local lastFrom, lastWant, stuck = nil, nil, 0
+            local tick = os.clock()
+            local grazed = false
+
+            for _ = 1, MAX_STEPS do
                 if not (char.Parent and part.Parent) then return false, "target gone" end
+
+                local mark = os.clock()
+                if lastWant then noteStep(mark - tick) end
+                tick = mark
 
                 local here, m = cursor()
 
-                -- Asked it to move and it did not. That means the cursor is
-                -- outside the Roblox window, where its reported position stops
-                -- changing — so every later move would be computed from a
-                -- position that is no longer real. Sweep it back in, throw away
-                -- the calibration that put it there, and start the walk over.
-                local recovering = false
-                if lastWant and lastWant.Magnitude >= 8 and (here - lastFrom).Magnitude < 1 then
-                    stuck = stuck + 1
-                    if stuck >= 2 then
-                        stuck, gain = 0, 1
-                        lastFrom, lastWant, lastPoint, lastGap = nil, nil, nil, nil
-                        if not sweepHome(here) then return false, "cursor is off the window" end
-                        recovering = true
+                -- The last move has not shown up yet. Issuing another on top of
+                -- it is how the cursor overshoots and has to come back — wait
+                -- for it to land instead. Against an edge it means something
+                -- else: the cursor is outside the window, where its reported
+                -- position stops changing at all, and only a sweep inwards gets
+                -- it back.
+                if lastWant and lastWant.Magnitude >= 4 and (here - lastFrom).Magnitude < 1 then
+                    if atBorder(here) then
+                        stuck = stuck + 1
+                        if stuck >= 2 then
+                            stuck = 0
+                            recalibrate()
+                            lastFrom, lastWant = nil, nil
+                            if not sweepHome(here) then return false, "cursor is off the window" end
+                        end
                     end
-                else
-                    stuck = 0
-                end
-
-                if recovering then
                     task.wait()
                 else
-                    -- The camera belongs to the lock below; two writers a frame
-                    -- is how the cursor ends up chasing a point that moves.
-                    local point, onScreen = project(livePoint(part))
+                    stuck = 0
+
+                    local now, onScreen = project(part.Position)
                     if not onScreen then return false, "off screen" end
 
                     if lastWant then learn(lastWant, here - lastFrom) end
 
-                    -- Walking away from the target three steps running means
-                    -- the calibration is wrong rather than the aim. Drop it and
-                    -- start over instead of chasing the cursor round the screen.
-                    local gap = (point - here).Magnitude
-                    if lastGap and gap > lastGap + 2 then
-                        worse = worse + 1
-                        if worse >= 3 then
-                            gain = 1
-                            return false, "cursor ran away — recalibrated"
-                        end
-                    else
-                        worse = 0
+                    -- Two questions, and for anyone moving they have different
+                    -- answers. Where must the ray land? Where they will be when
+                    -- the click is processed, a frame from now. Where must the
+                    -- cursor be sent? Where they will be once *this* move has
+                    -- landed, a frame later again. Never past their body edge
+                    -- either way: MM2 shoots wherever the cursor's ray stops, so
+                    -- a lead that overshoots them sends the wall behind instead.
+                    local radius = bodyRadius(part, now)
+                    local function ahead(seconds)
+                        local point, ok = project(livePoint(part, seconds))
+                        if not ok then return now end
+                        local drift = point - now
+                        local cap = radius * 0.8
+                        if drift.Magnitude > cap then drift = drift.Unit * cap end
+                        return now + drift
                     end
-                    lastGap = gap
 
-                    -- Being on their body is the test that matters. The pixel
-                    -- distance is the fallback for when something in front of
-                    -- them owns the cursor's ray.
+                    local hitPoint = ahead(stepTime + pingLead)
+                    local sendTo   = ahead(stepTime * 2 + pingLead)
+                    -- Against where the shot has to land, not where the next
+                    -- move is going: the cursor is already a frame ahead, and
+                    -- measuring it against the frame after that left a running
+                    -- target permanently one step out of reach.
+                    local gap = (hitPoint - here).Magnitude
+                    local spent = os.clock() >= budget
+
+                    -- The ray hitting them proves where they were a frame ago,
+                    -- which is the whole answer for someone standing still and
+                    -- worth nothing against someone crossing.
                     local hit = m.Target
-                    if hit and hit:IsDescendantOf(char) then return true, "on target" end
-                    if gap <= bodyRadius(part, point) then
+                    local onBody = hit and hit:IsDescendantOf(char)
+                    local settled = (hitPoint - now).Magnitude <= radius * 0.3
+                    local close = gap <= math.max(TOLERANCE, radius * 0.7)
+                        or (spent and gap <= radius)
+
+                    -- Pixels lie. A cursor within a body width of their centre
+                    -- can still be a ray that slips past them into the scenery
+                    -- twenty studs behind, and MM2 sends wherever the ray
+                    -- stops, so that is what has to be near them -- in studs.
+                    local lands = onBody and settled
+                    if not lands and close then
+                        local reach, at = pcall(function() return m.Hit.Position end)
+                        lands = reach
+                            and (at - livePoint(part, stepTime)).Magnitude <= NEAR_STUDS
+                        if not lands then grazed = true end
+                    end
+
+                    if lands then
                         -- MM2 shoots where the cursor's ray stops. A wall costs
                         -- a wasted shot, but another player standing in the line
                         -- costs the round: a sheriff who shoots an innocent dies
                         -- for it. Hold fire and let the next press try again.
-                        local blocker = hit and hit:FindFirstAncestorOfClass("Model")
+                        local blocker = not onBody and hit and hit:FindFirstAncestorOfClass("Model")
                         local owner = blocker and Players:GetPlayerFromCharacter(blocker)
                         if owner and owner ~= LocalPlayer then
                             return false, "holding fire — " .. owner.DisplayName .. " is in the line"
                         end
                         return true, hit and ("through " .. hit.Name) or "on target"
                     end
+                    if spent then break end
 
-                    -- Aim where they will be once this move lands, not where
-                    -- they were when it was projected: without this the cursor
-                    -- trails a running target forever. Short of a full frame,
-                    -- though — while the camera is easing the drift is slowing
-                    -- down, and leading it in full overshoots and comes back.
-                    local aim = lastPoint and (point + (point - lastPoint) * LEAD) or point
-                    lastPoint = point
-
-                    -- A fixed fraction of the gap never arrives; a share of the
-                    -- steps left arrives exactly on the last one.
-                    local left = math.max(1, steps - step + 1)
-                    local dest = clampToView(here + (aim - here) / left)
-                    -- Learn against what was actually asked for, which is the
-                    -- clamped move, not the one we would have liked to make.
+                    -- The whole way, every time. What the move does not achieve
+                    -- is measured next frame and taken off the one after.
+                    local dest = clampToView(sendTo)
                     lastFrom, lastWant = here, dest - here
                     if not moveTo(here, dest) then
                         return false, "no mouse control"
@@ -3661,7 +3868,13 @@ do
                     task.wait()
                 end
             end
-            gain = 1
+            -- On them by the pixels every time and never by the ray: they are
+            -- behind something, and the shot would go into whatever that is.
+            if grazed then return false, "the shot would land behind them" end
+
+            -- Never got there: the scale it is moving by is the thing most
+            -- likely wrong, so the next press starts from a clean one.
+            recalibrate()
             return false, "could not reach"
         end
 
@@ -3675,7 +3888,11 @@ do
         -- would otherwise have a dozen of them fighting over the cursor.
         function Mouse.fire(player, char, part, force)
             if busy then return false, "aiming" end
-            if not Mouse.CanMove then return false, "no mouse control" end
+            -- A locked cursor is aimed by turning, which needs no mouse mover
+            -- at all — only something to click with.
+            if UIS.MouseBehavior == Enum.MouseBehavior.Default and not Mouse.CanMove then
+                return false, "no mouse control"
+            end
 
             local now = os.clock()
             if not force and now - lastShot < S.Aim.FireRate then return false, "cooldown" end
@@ -3684,23 +3901,50 @@ do
             activePart = part
 
             local function sequence()
+                local dry = S.Aim.DryRun
+
+                -- Draw the gun and walk at the same time rather than one after
+                -- the other: EquipTool takes a frame or two, and so does the
+                -- walk, so waiting for the first before starting the second
+                -- doubled the time from the key press to the shot.
                 local gun, equipped = Game.gunTool()
-                if gun and not equipped then
-                    -- The click needs a gun that is actually out, and EquipTool
-                    -- does not land in the same frame.
-                    Game.equip(gun)
-                    local began = os.clock()
-                    while not select(2, Game.gunTool()) and os.clock() - began < 0.35 do
-                        task.wait()
-                    end
-                end
+                if gun and not equipped and not dry then Game.equip(gun) end
 
                 local reached, why = pointAt(char, part)
                 if not reached then
-                    Combat.LastResult = "mouse aim — " .. why
+                    Combat.LastResult = (dry and "aim test — " or "mouse aim — ") .. why
                     -- No shot went out; do not charge the next one a cooldown.
                     lastShot = 0
+                    -- A press that quietly does nothing looks like a dead key.
+                    if force then
+                        UI.notify({title = dry and "Aim Test" or "Aimbot", text = why, kind = "warn", duration = 2})
+                    end
                     return
+                end
+
+                -- Aim test: say where the cursor actually ended up. The point
+                -- under it is the one MM2 would have sent, so its distance to
+                -- them is the whole truth about whether the shot would land.
+                if dry then
+                    local _, m = cursor()
+                    local ok, at = pcall(function() return m.Hit.Position end)
+                    local speed = 0
+                    pcall(function() speed = part.AssemblyLinearVelocity.Magnitude end)
+                    local text = ok
+                        and ("%.1f studs off %s, who was doing %.0f studs/s (%s)"):format(
+                            (at - part.Position).Magnitude, player.DisplayName, speed, why)
+                        or "could not read where the cursor landed"
+                    Combat.LastResult = "aim test — " .. text
+                    if force then
+                        UI.notify({title = "Aim Test", text = text, duration = 4})
+                    end
+                    return
+                end
+
+                -- The click still needs the gun actually out.
+                local began = os.clock()
+                while not select(2, Game.gunTool()) and os.clock() - began < 0.25 do
+                    task.wait()
                 end
 
                 Mouse.Firing = true
@@ -3708,6 +3952,9 @@ do
                 Combat.LastResult = sent
                     and ("mouse shot at " .. player.DisplayName .. " — " .. why)
                     or "cursor on target but the click went nowhere"
+                if force and not sent then
+                    UI.notify({title = "Aimbot", text = "the click went nowhere", kind = "bad", duration = 2})
+                end
             end
 
             KH.detach(function()
@@ -3716,6 +3963,8 @@ do
                 -- silent-aim handler ignore every real click.
                 local ok, err = pcall(sequence)
                 Mouse.Firing = false
+                Mouse.Precise = false
+                Mouse.Lead = 0
                 activePart = nil
                 busy = false
                 if not ok then Combat.LastResult = "mouse aim error: " .. tostring(err) end
@@ -3726,16 +3975,33 @@ do
 
     -- Fires once at the current best target. Returns true when a shot went out.
     function Combat.fireOnce(force)
+        -- A key press that does nothing at all is the most confusing thing this
+        -- can do, so say why. Only for a real press: the render loop calls this
+        -- every frame and would notify every frame with it.
+        local function refuse(reason)
+            Combat.LastResult = reason
+            if force then
+                UI.notify({title = "Aimbot", text = reason, kind = "warn", duration = 2})
+            end
+            return false, reason
+        end
+
+        -- An aim test needs no gun: it is checking where the cursor lands, and
+        -- waiting to roll sheriff to find that out is most of a round each try.
         local gun = Game.gunTool()
-        if not gun then
-            Combat.LastResult = "no gun — you are not holding one"
-            return false, "no gun"
+        if not gun and not S.Aim.DryRun then
+            return refuse("no gun — you are not holding one")
         end
 
         local player, char, part = Combat.pickTarget()
+        if not player and S.Aim.DryRun then
+            -- Anyone will do when nothing is going to be fired at them.
+            player, char, part = Combat.pickTarget("Nearest")
+        end
         if not player then
-            Combat.LastResult = "no target"
-            return false, "no target"
+            return refuse(S.Aim.Target == "Murderer"
+                and "no target — the murderer is not known yet"
+                or "no target")
         end
         Combat.LastTarget = player
 
@@ -3752,7 +4018,12 @@ do
                 Combat.LastResult = tostring(err)
             end
         end
-        if not ok then return false, err end
+        -- A cooldown is the fire rate doing its job, not a failure worth saying
+        -- out loud; everything else here means the press went nowhere.
+        if not ok then
+            if err == "cooldown" then return false, err end
+            return refuse(tostring(err))
+        end
 
         if S.Aim.NotifyShot then
             UI.notify({title = "Shot", text = "Fired at " .. player.DisplayName, duration = 1.5})
@@ -3819,13 +4090,19 @@ do
                 part = picked
             end
             -- Last, because it is the only test that walks the character.
-            if part and Game.gunTool() then return part end
+            if part and (Game.gunTool() or S.Aim.DryRun) then return part end
             return nil
         end
 
         local function lockCamera(dt)
             local part = lockTarget()
-            if part then
+            -- A shot with a locked cursor is aimed entirely by this: it has to
+            -- land exactly on the target rather than ease towards it, and it
+            -- cannot stop early for being comfortably inside the view.
+            local precise = part ~= nil and Combat.Mouse.Precise
+            if precise then
+                turning = true
+            elseif part then
                 -- Turn only when there is something to turn for: a target
                 -- already well inside the view needs no camera work at all,
                 -- and a view that stays still is both smoother and far less
@@ -3854,7 +4131,8 @@ do
             held = CFrame.new(cam.CFrame.Position) * (held or cam.CFrame).Rotation
 
             if turning then
-                held = held:Lerp(CFrame.new(cam.CFrame.Position, Combat.Mouse.livePoint(part)), alpha)
+                local want = CFrame.new(cam.CFrame.Position, Combat.Mouse.aimPoint(part))
+                held = precise and want or held:Lerp(want, alpha)
                 cam.CFrame = held
                 return
             end
@@ -4340,8 +4618,12 @@ do
     -- Coins that were touched but whose model has not despawned yet. Without
     -- this the farm re-targets the same coin forever.
     local claimed = {}
-    Game.on("RoundStart", function() claimed = {} end)
-    Game.on("RoundEnd", function() claimed = {} end)
+
+    -- The drop we already reacted to, so we never run at it twice.
+    local triedDrop = nil
+
+    Game.on("RoundStart", function() claimed = {} triedDrop = nil end)
+    Game.on("RoundEnd", function() claimed = {} triedDrop = nil end)
 
     -- ------------------------------------------------------------- collect
     local function touch(part)
@@ -4450,7 +4732,19 @@ do
     -- ========================================================= GUN GRABBING
     local grabbing = false
 
-    function Farm.grabGun(announce)
+    -- The murderer cannot pick the gun up, so anything short of a confident
+    -- "not the murderer" counts as a no.
+    local function blockedReason(strict)
+        if Game.amMurderer() then return "You are the murderer — that gun is not yours to take." end
+        if Game.gunTool() then return "You already have a gun." end
+        if not U.isAliveChar(LocalPlayer) then return "You are not alive." end
+        -- Automatic grabs only: a button press is the user's call, but nothing
+        -- moves on its own while we cannot prove what we are.
+        if strict and not Game.selfKnown() then return "Roles are not known yet — staying put." end
+        return nil
+    end
+
+    function Farm.grabGun(announce, strict)
         local drop = Game.GunDrop
         if not drop or not drop.Parent then
             if announce then
@@ -4459,52 +4753,73 @@ do
             return false
         end
         if grabbing then return false end
-        if Game.gunTool() then return false end -- already armed
 
-        -- The murderer cannot pick the gun up. Going anyway means teleporting
-        -- onto the sheriff's body seconds after killing them, standing there
-        -- while the pickup that will never happen times out, and teleporting
-        -- back — in front of whoever is watching.
-        if Game.amMurderer() then
+        local blocked = blockedReason(strict)
+        if blocked then
             if announce then
-                UI.notify({title = "Gun Drop", text = "You are the murderer — that gun is not yours to take.", kind = "warn"})
+                UI.notify({title = "Gun Drop", text = blocked, kind = "warn"})
             end
             return false
         end
 
         grabbing = true
         KH.detach(function()
-            local root = U.myRoot()
-            if root then
+            -- pcall, or one error leaves the flag stuck on forever.
+            pcall(function()
+                local root = U.myRoot()
+                if not root then return end
+
                 local origin = root.CFrame
                 root.CFrame = CFrame.new(drop.Position + Vector3.new(0, 2.5, 0))
 
-                -- Wait for the pickup to actually register before hopping back.
-                local began = os.clock()
-                repeat
+                -- Wait for the pickup, rechecking we may stand here at all.
+                local began, bailed = os.clock(), false
+                while true do
                     task.wait(0.08)
-                until Game.gunTool() or not drop.Parent or os.clock() - began > 2.5
-
-                if S.Farm.GrabReturn then
-                    local current = U.myRoot()
-                    if current then current.CFrame = origin end
+                    if Game.gunTool() or not drop.Parent then break end
+                    if os.clock() - began > 2.5 then break end
+                    if U.myRoot() ~= root or blockedReason(false) then
+                        bailed = true
+                        break
+                    end
                 end
 
-                if Game.gunTool() then
+                -- Same body only: never drag a fresh spawn to the old spot.
+                if U.myRoot() == root and (bailed or S.Farm.GrabReturn) then
+                    root.CFrame = origin
+                end
+
+                if not bailed and Game.gunTool() then
                     UI.notify({title = "Gun Drop", text = "Picked up the dropped gun.", kind = "good"})
                 end
-            end
+            end)
             grabbing = false
         end)
         return true
     end
 
-    Game.on("GunDropped", function()
+    Game.on("GunDropped", function(drop)
         UI.notify({title = "Gun Dropped", text = "The sheriff went down — gun is on the floor.", kind = "warn", duration = 5})
-        if S.Farm.AutoGrabGun then
+        if not S.Farm.AutoGrabGun then return end
+        if drop == triedDrop then return end
+        triedDrop = drop
+
+        -- Off the signal thread: a listener that yields stalls the rest.
+        KH.detach(function()
             task.wait(0.6) -- let the part settle where it lands
-            Farm.grabGun(false)
-        end
+
+            -- The murderer's thrown knife is in flight right now, so empty
+            -- hands are not proof of innocence — wait for the real roles.
+            local deadline = os.clock() + 4
+            while not Game.selfKnown() and os.clock() < deadline do
+                if Game.amMurderer() then return end
+                task.wait(0.2)
+            end
+
+            if not S.Farm.AutoGrabGun then return end
+            if not drop.Parent or Game.GunDrop ~= drop then return end
+            Farm.grabGun(false, true)
+        end)
     end)
 
     Game.on("GunTaken", function()
@@ -5284,7 +5599,7 @@ do
 
     -- ========================================================== AIMBOT TAB
     do
-        local tab = UI.addTab("Aimbot", "🎯")
+        local tab = UI.addTab("Aimbot")
 
         local targeting = UI.section(tab, "Targeting")
         UI.label(targeting, "Draws your gun, then shoots the murderer wherever they are — through walls, across the map, no mouse movement. MM2's shot is a world position the server resolves, so nothing needs to be on screen.")
@@ -5339,12 +5654,20 @@ do
         }))
         UI.slider(mouseAim, opt("Aim", "MouseSpeed", {
             text = "Aim Speed",
-            desc = "Governs the turn and the cursor together. 1 is an instant snap; lower eases both, which looks far smoother for a few frames' delay. 0.4 lands in about a tenth of a second.",
+            desc = "How fast the camera turns onto the target. 1 snaps in one frame; lower eases the turn, which looks far smoother and is the only part of this anyone else can see. The cursor itself always goes straight there.",
             min = 0.1, max = 1, step = 0.05,
         }))
         UI.readout(mouseAim, {
             text = "Mouse Control",
             get = function() return Combat.Mouse.support() end,
+        })
+        UI.toggle(mouseAim, opt("Aim", "DryRun", {
+            text = "Aim Test (no shooting)",
+            desc = "Aims at the nearest player and reports how many studs the cursor landed from them, without firing and without needing a gun. For checking the aim without waiting to roll sheriff.",
+        }))
+        UI.readout(mouseAim, {
+            text = "Last Result",
+            get = function() return Combat.LastResult or "nothing yet" end,
         })
 
         local extras = UI.section(tab, "Extras")
@@ -5384,7 +5707,7 @@ do
 
     -- =========================================================== KNIFE TAB
     do
-        local tab = UI.addTab("Knife", "🔪")
+        local tab = UI.addTab("Knife")
         UI.label(UI.section(tab, "Murderer Only"),
             "These do nothing unless you are holding the knife.")
 
@@ -5444,7 +5767,7 @@ do
 
     -- ============================================================= ESP TAB
     do
-        local tab = UI.addTab("ESP", "👁")
+        local tab = UI.addTab("ESP")
 
         local players = UI.section(tab, "Players")
         UI.toggle(players, opt("ESP", "Enabled", {text = "ESP Enabled"}))
@@ -5499,7 +5822,7 @@ do
 
     -- ============================================================ FARM TAB
     do
-        local tab = UI.addTab("Farm", "💰")
+        local tab = UI.addTab("Farm")
 
         local coins = UI.section(tab, "Coins")
         UI.toggle(coins, opt("Farm", "CoinFarm", {
@@ -5550,7 +5873,7 @@ do
 
     -- ========================================================== SAFETY TAB
     do
-        local tab = UI.addTab("Safety", "🛡")
+        local tab = UI.addTab("Safety")
 
         local warning = UI.section(tab, "Murderer Warning")
         UI.label(warning, "The half of an MM2 script that keeps you alive when you are just an innocent.")
@@ -5598,7 +5921,7 @@ do
 
     -- ======================================================== MOVEMENT TAB
     do
-        local tab = UI.addTab("Movement", "🏃")
+        local tab = UI.addTab("Movement")
 
         local speed = UI.section(tab, "Speed & Jump")
         UI.toggle(speed, opt("Move", "SpeedEnabled", {
@@ -5700,7 +6023,7 @@ do
 
     -- ========================================================= VISUALS TAB
     do
-        local tab = UI.addTab("Visuals", "✨")
+        local tab = UI.addTab("Visuals")
 
         local lighting = UI.section(tab, "Lighting")
         UI.toggle(lighting, opt("Visual", "Fullbright", {
@@ -5733,7 +6056,7 @@ do
 
     -- ========================================================= PLAYERS TAB
     do
-        local tab = UI.addTab("Players", "👥")
+        local tab = UI.addTab("Players")
         local section = UI.section(tab, "In This Server")
         UI.label(section, "Live roster with roles. Click a name to spectate, or use the arrow to teleport.")
 
@@ -5881,7 +6204,7 @@ do
 
     -- ======================================================== SETTINGS TAB
     do
-        local tab = UI.addTab("Settings", "⚙")
+        local tab = UI.addTab("Settings")
 
         local interface = UI.section(tab, "Interface")
         UI.keybind(interface, opt("UI", "MenuKey", {text = "Menu Key"}))
@@ -6283,4 +6606,954 @@ do
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
     print(("[Kitty Hub] [%s] menu · [%s] aim · [%s] noclip · [%s] fly")
         :format(S.UI.MenuKey, S.Aim.Key, S.Move.NoclipKey, S.Move.FlyKey))
+end
+
+-- ─── src/mm2/15_probe.lua ──────────────────────────────────────────────
+
+-- ============================================================================
+--  PROBE — the diagnostics tab. Everything the mouse aim rests on but cannot
+--  see for itself: whether the cursor answers a synthetic move, what a pixel is
+--  worth to it, how fast a target really crosses the screen, and where the last
+--  few shots actually landed.
+-- ============================================================================
+
+do
+    local UI     = KH.UI
+    local U      = KH.U
+    local Combat = KH.Combat
+    local UIS    = KH.Services.UserInputService
+    local LocalPlayer = KH.LocalPlayer
+
+    local Probe = {}
+    KH.Probe = Probe
+
+    Probe.Cursor = "not run yet"
+    local live = {}       -- the target's numbers, while the tab is open
+    local history = {}    -- the last few aim results, newest first
+    local lines = {}      -- the labels those are printed into
+    local lastResult
+
+    -- --------------------------------------------------------- cursor test
+    -- Ask for a move of a known size and watch what mouse.X/Y makes of it. Two
+    -- answers matter: whether it answers at all, which is what the whole aim
+    -- loop is built on, and by how much, which is the display scale it has to
+    -- learn rather than assume.
+    local testing = false
+    function Probe.testCursor()
+        if testing then return end
+        if type(mousemoverel) ~= "function" then
+            Probe.Cursor = "no mousemoverel on this executor"
+            return
+        end
+        testing = true
+        Probe.Cursor = "running…"
+
+        KH.detach(function()
+            pcall(function()
+                local mouse = LocalPlayer:GetMouse()
+                local home = Vector2.new(mouse.X, mouse.Y)
+                local lag, scale, lost = {}, {}, 0
+
+                -- Start from the middle of the screen. A move that runs into
+                -- the edge of the window is clamped, and a clamped sample looks
+                -- exactly like a wildly wrong display scale.
+                local view = KH.camera().ViewportSize
+                pcall(mousemoverel,
+                    math.floor(view.X / 2 - mouse.X + 0.5),
+                    math.floor(view.Y / 2 - mouse.Y + 0.5))
+                task.wait()
+                task.wait()
+
+                local moves = {
+                    Vector2.new(120, 0), Vector2.new(-120, 0),
+                    Vector2.new(0, 90), Vector2.new(0, -90),
+                }
+                for _, delta in ipairs(moves) do
+                    local from = Vector2.new(mouse.X, mouse.Y)
+                    pcall(mousemoverel, delta.X, delta.Y)
+
+                    local landed, waited = nil, 0
+                    for frame = 1, 10 do
+                        task.wait()
+                        waited = frame
+                        if (Vector2.new(mouse.X, mouse.Y) - from).Magnitude >= 1 then
+                            task.wait()   -- one more, in case it arrives in pieces
+                            landed = Vector2.new(mouse.X, mouse.Y)
+                            break
+                        end
+                    end
+
+                    if landed then
+                        lag[#lag + 1] = waited
+                        scale[#scale + 1] = delta.Magnitude
+                            / math.max((landed - from).Magnitude, 0.001)
+                    else
+                        lost = lost + 1
+                    end
+                end
+
+                -- Put it back roughly where it was found.
+                pcall(mousemoverel,
+                    math.floor(home.X - mouse.X + 0.5),
+                    math.floor(home.Y - mouse.Y + 0.5))
+
+                if lost >= 3 then
+                    Probe.Cursor = "never moved — mouse aim cannot work on this setup"
+                elseif #scale == 0 then
+                    Probe.Cursor = "no usable samples"
+                else
+                    local frames = 0
+                    for i = 1, #lag do frames = frames + lag[i] end
+
+                    -- Median, and every sample printed beside it. One clamped
+                    -- or half-landed move used to drag the mean into nonsense
+                    -- and make a healthy setup look broken.
+                    local sorted, each = {}, {}
+                    for i = 1, #scale do
+                        sorted[i] = scale[i]
+                        each[i] = ("%.2f"):format(scale[i])
+                    end
+                    table.sort(sorted)
+
+                    Probe.Cursor = ("%d frame lag · scale %.2f (%s)%s"):format(
+                        math.floor(frames / #lag + 0.5),
+                        sorted[math.ceil(#sorted / 2)],
+                        table.concat(each, " "),
+                        lost > 0 and (" · " .. lost .. " lost") or "")
+                end
+            end)
+            testing = false
+        end)
+    end
+
+    -- ----------------------------------------------------------------- tab
+    local tab = UI.addTab("Probe")
+
+    local env = UI.section(tab, "This Executor")
+    UI.label(env, "What the mouse aim has to work with. If something here is wrong, no amount of tuning on the Aimbot tab will land a shot.")
+    UI.readout(env, {text = "Mouse Control", get = function() return Combat.Mouse.support() end})
+    UI.readout(env, {
+        text = "Mouse Behaviour",
+        get = function()
+            local mode = tostring(UIS.MouseBehavior):gsub("Enum%.MouseBehavior%.", "")
+            if mode == "Default" then return mode end
+            return mode .. " — cursor is locked"
+        end,
+    })
+    UI.button(env, {text = "Run Cursor Test", callback = function() Probe.testCursor() end})
+    UI.readout(env, {text = "Cursor Test", get = function() return Probe.Cursor end})
+
+    local target = UI.section(tab, "Target Right Now")
+    UI.label(target, "Live while this tab is open. The last line is the one that matters: a shot takes roughly 30 ms from the key press to the server, so anything near that is a target the aim has to lead rather than follow.")
+    UI.readout(target, {text = "Target", get = function() return live.name or "none" end})
+    UI.readout(target, {
+        text = "Distance",
+        get = function() return live.distance and ("%.0f studs"):format(live.distance) or "—" end,
+    })
+    UI.readout(target, {
+        text = "Speed",
+        get = function() return live.speed and ("%.0f studs/s"):format(live.speed) or "—" end,
+    })
+    UI.readout(target, {
+        text = "On Screen",
+        get = function()
+            if not live.name then return "—" end
+            return live.onScreen and "yes" or "no"
+        end,
+    })
+    UI.readout(target, {
+        text = "Body Width",
+        get = function() return live.radius and ("%.0f px"):format(live.radius * 2) or "—" end,
+    })
+    UI.readout(target, {
+        text = "Screen Speed",
+        get = function() return live.pxPerSec and ("%.0f px/s"):format(live.pxPerSec) or "—" end,
+    })
+    UI.readout(target, {
+        text = "Crosses Own Width",
+        get = function() return live.crossMs and ("%.0f ms"):format(live.crossMs) or "—" end,
+    })
+
+    local results = UI.section(tab, "Last Aim Results")
+    UI.label(results, "Switch on Aim Test on the Aimbot tab, then press your aim key at someone who is moving. Under a stud means the cursor was on them; twenty means the ray went past them into the scenery.")
+    for i = 1, 6 do
+        lines[i] = UI.label(results, "—")
+    end
+
+    -- -------------------------------------------------------- the report
+    -- One button, one paste. Reading numbers off a screen and retyping them is
+    -- how the important digit gets lost.
+    local function report()
+        local out = {
+            "kitty hub probe · v" .. tostring(KH.Version),
+            "executor: " .. tostring(KH.X.name),
+            "mouse control: " .. tostring(Combat.Mouse.support()),
+            "mouse behaviour: " .. tostring(UIS.MouseBehavior),
+            "cursor test: " .. tostring(Probe.Cursor),
+        }
+        if live.name then
+            out[#out + 1] = ("target: %s · %.0f studs · %.0f studs/s · body %.0f px · %.0f px/s · own width in %s")
+                :format(live.name, live.distance or 0, live.speed or 0,
+                    (live.radius or 0) * 2, live.pxPerSec or 0,
+                    live.crossMs and ("%.0f ms"):format(live.crossMs) or "n/a")
+        else
+            out[#out + 1] = "target: none in view"
+        end
+        out[#out + 1] = "aim results:"
+        for i = 1, #history do out[#out + 1] = "  " .. tostring(history[i]) end
+        if #history == 0 then out[#out + 1] = "  (none yet)" end
+        return table.concat(out, "\n")
+    end
+
+    local share = UI.section(tab, "Report")
+    UI.label(share, "Copies everything on this tab as text. Open the tab, take a few shots at someone moving with Aim Test on, then copy.")
+    UI.button(share, {
+        text = "Copy Report",
+        callback = function()
+            local ok, text = pcall(report)
+            if not ok then
+                UI.notify({title = "Probe", text = "Could not build the report.", kind = "bad", duration = 3})
+                return
+            end
+            if KH.X.setclipboard and pcall(setclipboard, text) then
+                UI.notify({title = "Probe", text = "Copied. Paste it wherever you need it.", kind = "good", duration = 3})
+            else
+                print(text)
+                UI.notify({
+                    title = "Probe",
+                    text = "No clipboard here — printed to the console (F9) instead.",
+                    kind = "warn",
+                    duration = 5,
+                })
+            end
+        end,
+    })
+
+    -- ------------------------------------------------------- aim history
+    -- Polled rather than pushed: the aim already writes its own outcome, and
+    -- nothing here has to reach into it to find out.
+    KH.loop(0.2, function()
+        local result = Combat.LastResult
+        if not result or result == lastResult then return end
+        lastResult = result
+        table.insert(history, 1, result)
+        for i = #history, 7, -1 do history[i] = nil end
+        for i = 1, #lines do lines[i].Text = history[i] or "—" end
+    end)
+
+    -- ------------------------------------------------------- live target
+    local lastPoint, lastAt
+    KH.loop(0.1, function()
+        if not (UI.IsOpen and UI.ActiveTab == "Probe") then
+            lastPoint = nil
+            return
+        end
+
+        local player, _, part = Combat.pickTarget()
+        if not player then player, _, part = Combat.pickTarget("Nearest") end
+        if not part then
+            live, lastPoint = {}, nil
+            return
+        end
+
+        local cam = KH.camera()
+        local point, onScreen = cam:WorldToViewportPoint(part.Position)
+        local here = Vector2.new(point.X, point.Y)
+        local now = os.clock()
+
+        local pxPerSec = 0
+        if lastPoint and now > lastAt then
+            pxPerSec = (here - lastPoint).Magnitude / (now - lastAt)
+        end
+        lastPoint, lastAt = here, now
+
+        local edge = cam:WorldToViewportPoint(part.Position + Vector3.new(0, part.Size.Y * 0.5, 0))
+        local radius = (Vector2.new(edge.X, edge.Y) - here).Magnitude
+
+        local speed = 0
+        pcall(function() speed = part.AssemblyLinearVelocity.Magnitude end)
+
+        live = {
+            name = player.DisplayName,
+            onScreen = onScreen,
+            distance = U.distanceTo(part.Position),
+            speed = speed,
+            pxPerSec = pxPerSec,
+            radius = radius,
+            crossMs = pxPerSec > 1 and (radius * 2 / pxPerSec) * 1000 or nil,
+        }
+    end)
+end
+
+-- ─── src/mm2/16_logo.lua ───────────────────────────────────────────────
+
+-- ============================================================================
+--  LOGO — the Kitty Hub mark, carried in the script rather than fetched.
+--
+--  Roblox only draws an image it can resolve as an asset, and this one was
+--  never uploaded to Roblox. getcustomasset turns a file in the executor's own
+--  folder into an asset, so the mark travels here as base64, is written out
+--  once on the first run, and is read straight off disk every run after.
+--
+--  The name carries a version because the file is cached: change the image and
+--  the old one has to stop being found, or it is the one that keeps drawing.
+--
+--  An executor with no file API gets nothing back. Nothing may assume this
+--  returns an asset — the splash draws the wordmark as text when it does not.
+-- ============================================================================
+
+do
+    local FILE = "kittyhub_logo_v2.png"
+    local STALE = {"kittyhub_logo.png"}
+
+    local ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local VALUE = {}
+    for i = 1, #ALPHABET do VALUE[ALPHABET:byte(i)] = i - 1 end
+
+    -- Whitespace and padding read back as nil and are skipped, so the blob
+    -- below can be wrapped to a sane width.
+    local function decode(text)
+        local out, bits, held = {}, 0, 0
+        for i = 1, #text do
+            local value = VALUE[text:byte(i)]
+            if value then
+                bits = bits * 64 + value
+                held = held + 6
+                if held >= 8 then
+                    held = held - 8
+                    local scale = 2 ^ held
+                    out[#out + 1] = string.char(math.floor(bits / scale) % 256)
+                    bits = bits % scale
+                end
+            end
+        end
+        return table.concat(out)
+    end
+
+    local DATA = [[
+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]]
+
+    local asset, resolved = nil, false
+
+    function KH.logoAsset()
+        if resolved then return asset end
+        resolved = true
+        if type(getcustomasset) ~= "function" then return nil end
+
+        local ok, result = pcall(function()
+            -- A truncated file from a half-finished write would resolve to an
+            -- asset that draws nothing, so check it looks like the image before
+            -- trusting it.
+            if type(isfile) == "function" and isfile(FILE) then
+                local read, existing = pcall(readfile, FILE)
+                if read and type(existing) == "string" and #existing > 1000 then
+                    return getcustomasset(FILE)
+                end
+            end
+            if not KH.X.writefile then return nil end
+            writefile(FILE, decode(DATA))
+
+            -- Best effort: an earlier version of the mark is dead weight now.
+            if type(delfile) == "function" and type(isfile) == "function" then
+                for _, old in ipairs(STALE) do
+                    if isfile(old) then pcall(delfile, old) end
+                end
+            end
+
+            return getcustomasset(FILE)
+        end)
+
+        asset = ok and result or nil
+        return asset
+    end
+end
+
+-- ─── src/mm2/17_splash.lua ─────────────────────────────────────────────
+
+-- ============================================================================
+--  SPLASH — the load-in screen.
+--
+--  Cosmetic, and honest about it: the script is a single chunk and has already
+--  finished running by the time this draws, so nothing here is waiting on
+--  anything. It sits over the menu for a moment and fades off.
+--
+--  Everything it makes is owned by KH and has a hard timer behind it, so there
+--  is no path where it stays on screen — including the blur, which would be the
+--  worst thing to leave behind.
+-- ============================================================================
+
+do
+    local UI       = KH.UI
+    local C        = UI.C
+    local make     = UI.make
+    local Lighting = KH.Services.Lighting
+
+    if UI.Overlay then
+        local fades = {}
+        local function fading(obj, prop)
+            fades[#fades + 1] = {obj = obj, prop = prop or "BackgroundTransparency"}
+            return obj
+        end
+
+        -- Blurring what is behind it is what makes a transparent cover read as
+        -- glass rather than as a screen that failed to draw.
+        local blur = make("BlurEffect", {Name = "khSplash", Size = 0, Parent = Lighting})
+        KH.own(blur)
+
+        -- Active = false: even in the worst case this can never swallow a click.
+        local root = fading(make("Frame", {
+            Name = "Splash",
+            BackgroundColor3 = C.Bg,
+            BorderSizePixel = 0,
+            Size = UDim2.fromScale(1, 1),
+            Active = false,
+            ZIndex = 500,
+            Parent = UI.Overlay,
+        }))
+        KH.own(root)
+
+        -- Darkest at the edges, thinnest across the middle, so the game stays
+        -- readable behind the card instead of being painted out.
+        make("UIGradient", {
+            Rotation = 90,
+            Color = ColorSequence.new(C.Bg, C.Panel),
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.12),
+                NumberSequenceKeypoint.new(0.5, 0.46),
+                NumberSequenceKeypoint.new(1, 0.12),
+            }),
+            Parent = root,
+        })
+
+        local card = fading(make("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.fromOffset(330, 224),
+            BackgroundColor3 = C.Panel,
+            BackgroundTransparency = 0.1,
+            BorderSizePixel = 0,
+            ZIndex = 502,
+            Parent = root,
+        }))
+        UI.corner(card, 16)
+        UI.gradient(card, C.Card, C.Panel, 90)
+        fading(UI.stroke(card, C.Accent, 1, 0.55), "Transparency")
+
+        local shadow = UI.shadow(card, 30, 0.45)
+        shadow.ZIndex = 501
+        fading(shadow, "ImageTransparency")
+
+        -- A hairline of accent along the top edge, faded out at both ends.
+        local edge = fading(make("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0),
+            Position = UDim2.new(0.5, 0, 0, 0),
+            Size = UDim2.new(1, -70, 0, 1),
+            BackgroundColor3 = C.Accent,
+            BorderSizePixel = 0,
+            ZIndex = 503,
+            Parent = card,
+        }))
+        make("UIGradient", {
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(0.5, 0.05),
+                NumberSequenceKeypoint.new(1, 1),
+            }),
+            Parent = edge,
+        })
+
+        -- The mark carries the name, so there is no title line to draw with it.
+        -- Without it, the name has to be set instead.
+        local asset = KH.logoAsset()
+        if asset then
+            fading(make("ImageLabel", {
+                Image = asset,
+                BackgroundTransparency = 1,
+                AnchorPoint = Vector2.new(0.5, 0),
+                Position = UDim2.new(0.5, 0, 0, 24),
+                Size = UDim2.fromOffset(96, 96),
+                ZIndex = 503,
+                Parent = card,
+            }), "ImageTransparency")
+        else
+            fading(make("TextLabel", {
+                Text = "KITTY HUB",
+                Font = Enum.Font.GothamBold,
+                TextSize = 24,
+                TextColor3 = C.Text,
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(0, 56),
+                Size = UDim2.new(1, 0, 0, 30),
+                ZIndex = 503,
+                Parent = card,
+            }), "TextTransparency")
+        end
+
+        fading(make("TextLabel", {
+            Text = "Murder Mystery 2",
+            Font = Enum.Font.Gotham,
+            TextSize = 12,
+            TextColor3 = C.TextDim,
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(0, 128),
+            Size = UDim2.new(1, 0, 0, 16),
+            ZIndex = 503,
+            Parent = card,
+        }), "TextTransparency")
+
+        local track = fading(make("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0),
+            Position = UDim2.new(0.5, 0, 0, 156),
+            Size = UDim2.fromOffset(236, 3),
+            BackgroundColor3 = C.Row,
+            BackgroundTransparency = 0.35,
+            BorderSizePixel = 0,
+            ZIndex = 503,
+            Parent = card,
+        }))
+        UI.corner(track, 2)
+
+        local fill = fading(make("Frame", {
+            Size = UDim2.fromScale(0, 1),
+            BackgroundColor3 = C.Accent,
+            BorderSizePixel = 0,
+            ZIndex = 504,
+            Parent = track,
+        }))
+        UI.corner(fill, 2)
+
+        local status = fading(make("TextLabel", {
+            Text = "starting up",
+            Font = Enum.Font.Gotham,
+            TextSize = 11,
+            TextColor3 = C.TextDim,
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(0, 170),
+            Size = UDim2.new(1, 0, 0, 14),
+            ZIndex = 503,
+            Parent = card,
+        }), "TextTransparency")
+
+        fading(make("TextLabel", {
+            Text = ("v%s  ·  %s"):format(KH.Version, KH.X.name),
+            Font = Enum.Font.Gotham,
+            TextSize = 10,
+            TextColor3 = C.TextFaint,
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(0, 194),
+            Size = UDim2.new(1, 0, 0, 14),
+            ZIndex = 503,
+            Parent = card,
+        }), "TextTransparency")
+
+        -- Nothing is loading, so the bar walks a fixed path rather than
+        -- pretending to measure one.
+        local stages = {
+            {0.3, "checking the executor"},
+            {0.6, "building the interface"},
+            {0.85, "arming features"},
+            {1, "ready"},
+        }
+
+        KH.spawn(function()
+            UI.tween(blur, 0.25, {Size = 14})
+            for _, stage in ipairs(stages) do
+                if not (KH.Alive and root.Parent) then return end
+                status.Text = stage[2]
+                UI.tween(fill, 0.2, {Size = UDim2.fromScale(stage[1], 1)})
+                task.wait(0.2)
+            end
+
+            task.wait(0.1)
+            if not (KH.Alive and root.Parent) then return end
+            for _, item in ipairs(fades) do
+                pcall(function() UI.tween(item.obj, 0.35, {[item.prop] = 1}) end)
+            end
+            UI.tween(blur, 0.35, {Size = 0})
+            task.wait(0.4)
+            root:Destroy()
+            blur:Destroy()
+        end)
+
+        -- Whatever happens above — an error, an unload mid-fade — both come
+        -- off. Reading Parent on a destroyed instance is safe.
+        task.delay(4, function()
+            if root.Parent then root:Destroy() end
+            if blur.Parent then blur:Destroy() end
+        end)
+    end
 end

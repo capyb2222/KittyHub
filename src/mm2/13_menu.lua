@@ -33,7 +33,7 @@ do
 
     -- ========================================================== AIMBOT TAB
     do
-        local tab = UI.addTab("Aimbot", "🎯")
+        local tab = UI.addTab("Aimbot")
 
         local targeting = UI.section(tab, "Targeting")
         UI.label(targeting, "Draws your gun, then shoots the murderer wherever they are — through walls, across the map, no mouse movement. MM2's shot is a world position the server resolves, so nothing needs to be on screen.")
@@ -88,12 +88,20 @@ do
         }))
         UI.slider(mouseAim, opt("Aim", "MouseSpeed", {
             text = "Aim Speed",
-            desc = "Governs the turn and the cursor together. 1 is an instant snap; lower eases both, which looks far smoother for a few frames' delay. 0.4 lands in about a tenth of a second.",
+            desc = "How fast the camera turns onto the target. 1 snaps in one frame; lower eases the turn, which looks far smoother and is the only part of this anyone else can see. The cursor itself always goes straight there.",
             min = 0.1, max = 1, step = 0.05,
         }))
         UI.readout(mouseAim, {
             text = "Mouse Control",
             get = function() return Combat.Mouse.support() end,
+        })
+        UI.toggle(mouseAim, opt("Aim", "DryRun", {
+            text = "Aim Test (no shooting)",
+            desc = "Aims at the nearest player and reports how many studs the cursor landed from them, without firing and without needing a gun. For checking the aim without waiting to roll sheriff.",
+        }))
+        UI.readout(mouseAim, {
+            text = "Last Result",
+            get = function() return Combat.LastResult or "nothing yet" end,
         })
 
         local extras = UI.section(tab, "Extras")
@@ -133,7 +141,7 @@ do
 
     -- =========================================================== KNIFE TAB
     do
-        local tab = UI.addTab("Knife", "🔪")
+        local tab = UI.addTab("Knife")
         UI.label(UI.section(tab, "Murderer Only"),
             "These do nothing unless you are holding the knife.")
 
@@ -193,7 +201,7 @@ do
 
     -- ============================================================= ESP TAB
     do
-        local tab = UI.addTab("ESP", "👁")
+        local tab = UI.addTab("ESP")
 
         local players = UI.section(tab, "Players")
         UI.toggle(players, opt("ESP", "Enabled", {text = "ESP Enabled"}))
@@ -248,7 +256,7 @@ do
 
     -- ============================================================ FARM TAB
     do
-        local tab = UI.addTab("Farm", "💰")
+        local tab = UI.addTab("Farm")
 
         local coins = UI.section(tab, "Coins")
         UI.toggle(coins, opt("Farm", "CoinFarm", {
@@ -299,7 +307,7 @@ do
 
     -- ========================================================== SAFETY TAB
     do
-        local tab = UI.addTab("Safety", "🛡")
+        local tab = UI.addTab("Safety")
 
         local warning = UI.section(tab, "Murderer Warning")
         UI.label(warning, "The half of an MM2 script that keeps you alive when you are just an innocent.")
@@ -347,7 +355,7 @@ do
 
     -- ======================================================== MOVEMENT TAB
     do
-        local tab = UI.addTab("Movement", "🏃")
+        local tab = UI.addTab("Movement")
 
         local speed = UI.section(tab, "Speed & Jump")
         UI.toggle(speed, opt("Move", "SpeedEnabled", {
@@ -449,7 +457,7 @@ do
 
     -- ========================================================= VISUALS TAB
     do
-        local tab = UI.addTab("Visuals", "✨")
+        local tab = UI.addTab("Visuals")
 
         local lighting = UI.section(tab, "Lighting")
         UI.toggle(lighting, opt("Visual", "Fullbright", {
@@ -482,7 +490,7 @@ do
 
     -- ========================================================= PLAYERS TAB
     do
-        local tab = UI.addTab("Players", "👥")
+        local tab = UI.addTab("Players")
         local section = UI.section(tab, "In This Server")
         UI.label(section, "Live roster with roles. Click a name to spectate, or use the arrow to teleport.")
 
@@ -630,7 +638,7 @@ do
 
     -- ======================================================== SETTINGS TAB
     do
-        local tab = UI.addTab("Settings", "⚙")
+        local tab = UI.addTab("Settings")
 
         local interface = UI.section(tab, "Interface")
         UI.keybind(interface, opt("UI", "MenuKey", {text = "Menu Key"}))

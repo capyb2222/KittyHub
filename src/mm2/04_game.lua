@@ -55,12 +55,28 @@ do
     end
 
     -- --------------------------------------------------------- role tracking
-    local function applyData(data)
-        if typeof(data) ~= "table" then return end
-        Game.Data = data
+    -- Our own role is latched for the round. MM2 empties our hands the moment
+    -- the knife is thrown and the role table can arrive late, in pieces, or
+    -- still holding last round's answer — one unlucky read must never turn the
+    -- murderer back into an innocent.
+    local myLatch = nil
 
+    local function latch(role)
+        if role == "Murderer" or role == "Sheriff" or role == "Hero" then
+            myLatch = role
+        end
+    end
+
+    local function clearRoles()
+        Game.Data = {}
+        Game.Murderer, Game.Sheriff, Game.Hero = nil, nil, nil
+        myLatch = nil
+    end
+    Game.clearRoles = clearRoles
+
+    local function recompute()
         local murderer, sheriff, hero
-        for name, entry in pairs(data) do
+        for name, entry in pairs(Game.Data) do
             if typeof(entry) == "table" then
                 local role = entry.Role
                 if role == "Murderer" then murderer = name
@@ -74,9 +90,43 @@ do
             or (hero ~= Game.Hero)
 
         Game.Murderer, Game.Sheriff, Game.Hero = murderer, sheriff, hero
+
+        local me = LocalPlayer.Name
+        if murderer == me then latch("Murderer")
+        elseif sheriff == me then latch("Sheriff")
+        elseif hero == me then latch("Hero") end
+
         if changed then emit("RoleChange", murderer, sheriff, hero) end
     end
+
+    -- Only a payload that actually carries roles may replace what we have; a
+    -- partial push used to wipe the table and leave us knowing nothing.
+    local function applyData(data)
+        if typeof(data) ~= "table" then return end
+
+        local fresh, roles = {}, 0
+        for name, entry in pairs(data) do
+            if typeof(name) == "string" and typeof(entry) == "table" then
+                fresh[name] = entry
+                if typeof(entry.Role) == "string" then roles = roles + 1 end
+            end
+        end
+        if roles == 0 then return end
+
+        Game.Data = fresh
+        recompute()
+    end
     Game.applyData = applyData
+
+    -- Some builds push one player's entry instead of the whole table.
+    local function applyOne(who, entry)
+        local name = who
+        if typeof(who) == "Instance" and who:IsA("Player") then name = who.Name end
+        if typeof(name) ~= "string" or typeof(entry) ~= "table" then return end
+        if typeof(entry.Role) ~= "string" then return end
+        Game.Data[name] = entry
+        recompute()
+    end
 
     function Game.refreshRoles()
         local remote = findRemote("GetPlayerData")
@@ -94,15 +144,11 @@ do
     KH.spawn(function()
         local gameplay = findRemote("PlayerDataChanged")
         if gameplay and gameplay:IsA("RemoteEvent") then
-            KH.track(gameplay.OnClientEvent:Connect(applyData))
+            KH.track(gameplay.OnClientEvent:Connect(function(first, second)
+                if typeof(first) == "table" then applyData(first) else applyOne(first, second) end
+            end))
         end
         Game.refreshRoles()
-    end)
-
-    -- Poll as a safety net: the push event is the fast path, but if it is ever
-    -- renamed we still recover roles within a couple of seconds.
-    KH.loop(2, function()
-        if not Game.Murderer then Game.refreshRoles() end
     end)
 
     -- ------------------------------------------------- tool-based fallback
@@ -143,10 +189,12 @@ do
         local role = entry and entry.Role or nil
         local held = cachedToolRole(player)
 
+        -- Only the murderer ever holds a knife, so that outranks the table —
+        -- including a table left standing from the round before.
+        if held == "Murderer" then return "Murderer" end
+
         if role == nil or role == "Innocent" then
-            if held == "Murderer" then
-                role = "Murderer"
-            elseif held == "Sheriff" then
+            if held == "Sheriff" then
                 -- An innocent holding a gun picked it up off a dead sheriff.
                 role = (role == "Innocent") and "Hero" or "Sheriff"
             end
@@ -169,12 +217,52 @@ do
         return U.isAliveChar(player)
     end
 
-    function Game.myRole() return Game.roleOf(LocalPlayer) end
+    function Game.myRole()
+        local role = Game.roleOf(LocalPlayer)
+        latch(role)
+        if role == "Innocent" and myLatch then return myLatch end
+        return role
+    end
+
     function Game.amSheriff()
         local role = Game.myRole()
         return role == "Sheriff" or role == "Hero"
     end
-    function Game.amMurderer() return Game.myRole() == "Murderer" end
+
+    -- Asked from every angle: a wrong "no" walks the murderer onto the gun.
+    function Game.amMurderer()
+        if myLatch == "Murderer" then return true end
+        if Game.Murderer == LocalPlayer.Name then return true end
+        if Game.knifeTool() then return true end
+        return Game.myRole() == "Murderer"
+    end
+
+    -- Lets callers tell "innocent" apart from "no idea yet".
+    function Game.selfKnown()
+        if myLatch then return true end
+        local entry = Game.Data[LocalPlayer.Name]
+        return typeof(entry) == "table" and typeof(entry.Role) == "string"
+    end
+
+    -- Latch our role even when nothing asks: the knife is only ours briefly.
+    KH.loop(0.5, function() Game.myRole() end)
+
+    -- Poll until we know who the murderer is *and* what we are, then keep
+    -- re-asking slowly: a missed round boundary would otherwise leave last
+    -- round's roles standing for the whole of this one.
+    local polledAt = 0
+    KH.loop(2, function()
+        if Game.Murderer and Game.selfKnown() and os.clock() - polledAt < 10 then return end
+        polledAt = os.clock()
+        Game.refreshRoles()
+    end)
+
+    -- A fresh body means a fresh round; stale roles are worse than none.
+    KH.track(LocalPlayer.CharacterAdded:Connect(function()
+        clearRoles()
+        task.wait(1)
+        Game.refreshRoles()
+    end))
 
     -- Resolve names to live Player objects, skipping the dead.
     local function playerByName(name, requireAlive)
@@ -326,14 +414,15 @@ do
         if obj.Parent == workspace and obj.Name ~= "Lobby" and isMapModel(obj) then
             Game.Traps = {}
             Game.GunDrop = nil
+            clearRoles()
             emit("RoundStart", obj)
+            KH.detach(Game.refreshRoles)
         end
     end))
 
     KH.track(workspace.ChildRemoved:Connect(function(obj)
         if obj.Name ~= "Lobby" and obj:FindFirstChild("CoinContainer") then
-            Game.Data = {}
-            Game.Murderer, Game.Sheriff, Game.Hero = nil, nil, nil
+            clearRoles()
             Game.Traps = {}
             Game.GunDrop = nil
             emit("RoundEnd")

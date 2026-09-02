@@ -453,7 +453,6 @@ do
             entry.page.Visible = on
             tween(entry.button, 0.14, {BackgroundTransparency = on and 0.86 or 1})
             tween(entry.label, 0.14, {TextColor3 = on and C.Text or C.TextDim})
-            tween(entry.icon, 0.14, {TextTransparency = on and 0 or 0.35})
         end
         indicator.Visible = true
         tween(indicator, 0.2, {
@@ -462,7 +461,7 @@ do
         }, Enum.EasingStyle.Back)
     end
 
-    function UI.addTab(name, icon)
+    function UI.addTab(name)
         tabOrder = tabOrder + 1
         local button = make("TextButton", {
             Name = name,
@@ -478,25 +477,14 @@ do
         UI.corner(button, 7)
         UI.accented(button, "BackgroundColor3")
 
-        local iconLabel = make("TextLabel", {
-            Text = icon or "•",
-            Font = Enum.Font.GothamBold,
-            TextSize = 13,
-            TextColor3 = C.Text,
-            TextTransparency = 0.35,
-            BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(9, 0),
-            Size = UDim2.fromOffset(20, 34),
-            Parent = button,
-        })
         local textLabel = make("TextLabel", {
             Text = name,
             Font = Enum.Font.GothamMedium,
             TextSize = 13,
             TextColor3 = C.TextDim,
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(32, 0),
-            Size = UDim2.new(1, -38, 1, 0),
+            Position = UDim2.fromOffset(15, 0),
+            Size = UDim2.new(1, -21, 1, 0),
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = button,
         })
@@ -518,7 +506,7 @@ do
         UI.list(page, 10)
         UI.pad(page, 0, 2, 16, 14, 14)
 
-        local tab = {name = name, button = button, page = page, label = textLabel, icon = iconLabel, sections = {}}
+        local tab = {name = name, button = button, page = page, label = textLabel, sections = {}}
         tabs[name] = tab
 
         button.MouseEnter:Connect(function()
