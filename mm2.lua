@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Murder Mystery 2 Script
---   build 3.0.0+6020724f  ·  2026-09-03 01:28 UTC
+--   build 3.0.0+2f7f684f  ·  2026-09-03 01:39 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
@@ -213,6 +213,7 @@ do
             ThrowRange    = 70,          -- past this the knife is just thrown away
             ThrowKey      = "G",         -- one press, one throw
             ThrowAnim     = true,        -- play MM2's own wind-up with the throw
+            ThrowRelease  = 55,          -- percent of it before the knife leaves the hand
             Aura          = false,
             AuraRadius    = 18,
             AuraDelay     = 0.15,
@@ -1214,36 +1215,81 @@ do
         return hum:FindFirstChildOfClass("Animator") or hum
     end
 
-    local function playThrowAnimation(knife)
-        if not KH.S.Knife.ThrowAnim then return end
+    -- Resolve and load without playing. The track's length is what the release
+    -- delay is measured from and it reads zero until Roblox has actually
+    -- fetched the asset, so doing this ahead of time is the difference between
+    -- the first throw of a round looking right and looking like the rest.
+    function Game.primeThrowAnimation(knife)
+        knife = knife or Game.knifeTool()
+        if not knife then return nil end
 
         if anim.tool ~= knife then
-            anim.tool = knife
-            anim.source = findThrowAnimation(knife)
-            anim.track = nil
+            anim.tool, anim.source, anim.track = knife, findThrowAnimation(knife), nil
         end
-        if not anim.source then return end
+        if not anim.source then return nil end
 
         local animator = animatorOf(U.charOf(LocalPlayer))
-        if not animator then return end
+        if not animator then return nil end
         if anim.animator ~= animator then
             anim.animator, anim.track = animator, nil
         end
         if not anim.track then
             local ok, track = pcall(function() return animator:LoadAnimation(anim.source) end)
-            if not ok or not track then return end
+            if not ok or not track then return nil end
             anim.track = track
         end
-
-        -- Restart rather than stack: two presses in quick succession should
-        -- look like two throws, not one blended into itself.
-        pcall(function()
-            if anim.track.IsPlaying then anim.track:Stop(0) end
-            anim.track:Play(0.05)
-        end)
+        return anim.track
     end
 
-    function Game.throwKnife(targetPos)
+    -- Nobody throws a knife on the first frame of the wind-up. Play it, then
+    -- say how long the knife should stay in the hand — the arm has to come back
+    -- before anything leaves it, and firing the remote immediately is what made
+    -- the throw read as a script no matter how good the animation looked.
+    --
+    -- A hard ceiling regardless of the slider: a knife still in your hand most
+    -- of a second after you decided to throw it is a bug, not a style.
+    local RELEASE_CAP = 0.75
+
+    local function playThrowAnimation()
+        if not KH.S.Knife.ThrowAnim then return 0 end
+        local track = Game.primeThrowAnimation()
+        if not track then return 0 end
+
+        -- Restart rather than stack: two throws in quick succession should look
+        -- like two throws, not one blended into itself.
+        local ok = pcall(function()
+            if track.IsPlaying then track:Stop(0) end
+            track:Play(0.05)
+        end)
+        if not ok then return 0 end
+
+        -- Still no length means the asset has not landed yet. That throw goes
+        -- out immediately rather than waiting on a delay nothing can measure —
+        -- exactly what it did before the animation existed.
+        local length = track.Length
+        if typeof(length) ~= "number" or length <= 0 then return 0 end
+
+        local point = U.clamp((KH.S.Knife.ThrowRelease or 55) / 100, 0, 1)
+        return math.min(length * point, RELEASE_CAP)
+    end
+
+    -- Leaving a wind-up frozen on the character is the one thing unloading
+    -- must not do.
+    KH.undo(function()
+        if anim.track then pcall(function() anim.track:Stop(0) end) end
+    end)
+
+    -- One throw in the air at a time. The hold below yields, and a second call
+    -- landing inside it would restart the animation under a knife that has
+    -- already been committed.
+    local holding = false
+
+    -- `refresh`, when given, is asked for the aim again at the moment the knife
+    -- actually leaves the hand. Without it a held throw would fly at wherever
+    -- the target stood when the arm started moving.
+    function Game.throwKnife(targetPos, refresh)
+        if holding then return false, "mid-throw" end
+
         local knife, equipped = Game.knifeTool()
         if not knife then return false, "no knife" end
         if not equipped and not Game.equip(knife) then return false, "could not equip" end
@@ -1259,19 +1305,42 @@ do
         if not thrown then thrown = knife:FindFirstChild("Throw") end
         if not thrown or not thrown:IsA("RemoteEvent") then return false, "no throw remote" end
 
+        -- Built at the moment of release, not before it: both the hand and the
+        -- target have moved by then.
+        --
         -- Orientation, not just position: MM2 flies the knife along the CFrame
         -- it is handed, and a bare CFrame.new(position) faces down the world
         -- axis rather than at the target. Degenerate when the two points
         -- coincide, so that case keeps the old bare frame.
-        local from = CFrame.new(hand.Position)
-        if (targetPos - hand.Position).Magnitude > 0.5 then
-            from = CFrame.new(hand.Position, targetPos)
+        local function send(point)
+            local from = CFrame.new(hand.Position)
+            if (point - hand.Position).Magnitude > 0.5 then
+                from = CFrame.new(hand.Position, point)
+            end
+            pcall(function()
+                thrown:FireServer(from, CFrame.new(point) * (from - from.Position))
+            end)
         end
-        -- Animate and fire together. The wind-up is cosmetic and replicates on
-        -- its own thread, so the knife must not wait on it.
-        playThrowAnimation(knife)
-        pcall(function()
-            thrown:FireServer(from, CFrame.new(targetPos) * (from - from.Position))
+
+        local hold = playThrowAnimation()
+        if hold <= 0 then
+            send(targetPos)
+            return true
+        end
+
+        holding = true
+        KH.detach(function()
+            -- pcall, or one error leaves the flag stuck on forever.
+            pcall(function()
+                task.wait(hold)
+                -- Dying mid-wind-up, stowing the knife, or unloading the script
+                -- cancels the throw rather than firing a remote from a hand
+                -- that is not there any more.
+                if not KH.Alive then return end
+                if not (hand.Parent and knife.Parent == U.charOf(LocalPlayer)) then return end
+                send(refresh and refresh() or targetPos)
+            end)
+            holding = false
         end)
         return true
     end
@@ -4642,10 +4711,14 @@ do
         return target ~= nil and target.distance <= (S.Knife.ThrowRange or 70)
     end
 
+    -- Asked once now, for the throw that goes straight out, and again at the
+    -- release when the animation holds the knife back. Same aim either way.
     local function throwAt(target)
-        local point = U.predict(target.char, S.Aim.Prediction + 1, S.Aim.PingComp)
-            or target.part.Position
-        return Game.throwKnife(point)
+        local function point()
+            return U.predict(target.char, S.Aim.Prediction + 1, S.Aim.PingComp)
+                or target.part.Position
+        end
+        return Game.throwKnife(point(), point)
     end
 
     function Combat.throwAtNearest()
@@ -4731,6 +4804,16 @@ do
         if not Game.knifeTool() then return end
         Combat.throwAtNearest()
         task.wait(math.max(S.Knife.ThrowDelay, 0.2))
+    end)
+
+    -- Load the throw animation before it is first needed. Its length is what
+    -- the release is measured from, and that reads zero until Roblox has the
+    -- asset — which would leave the first throw of every round the one that
+    -- goes out on frame one.
+    KH.loop(1, function()
+        if not S.Knife.ThrowAnim then return end
+        local knife = Game.knifeTool()
+        if knife then Game.primeThrowAnimation(knife) end
     end)
 
     -- Knife aura: stab anything that wanders into range.
@@ -5975,7 +6058,12 @@ do
         }))
         UI.toggle(throwing, opt("Knife", "ThrowAnim", {
             text = "Throw Animation",
-            desc = "Play MM2's own wind-up with the throw. Without it the knife leaves a character that never moved, which is what a scripted throw looks like to everyone watching.",
+            desc = "Play MM2's own wind-up, and hold the knife until the arm has actually swung. Without it the knife leaves a character that never moved, which is what a scripted throw looks like to everyone watching.",
+        }))
+        UI.slider(throwing, opt("Knife", "ThrowRelease", {
+            text = "Release Point",
+            desc = "How far into the wind-up the knife leaves your hand, as a share of the animation. Lower throws sooner and looks more scripted; higher looks right but costs you that long before the knife is in the air. Capped at three quarters of a second whatever this says.",
+            min = 0, max = 100, step = 5, suffix = "%",
         }))
         UI.button(throwing, {
             text = "Throw Now",

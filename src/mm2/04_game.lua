@@ -581,36 +581,81 @@ do
         return hum:FindFirstChildOfClass("Animator") or hum
     end
 
-    local function playThrowAnimation(knife)
-        if not KH.S.Knife.ThrowAnim then return end
+    -- Resolve and load without playing. The track's length is what the release
+    -- delay is measured from and it reads zero until Roblox has actually
+    -- fetched the asset, so doing this ahead of time is the difference between
+    -- the first throw of a round looking right and looking like the rest.
+    function Game.primeThrowAnimation(knife)
+        knife = knife or Game.knifeTool()
+        if not knife then return nil end
 
         if anim.tool ~= knife then
-            anim.tool = knife
-            anim.source = findThrowAnimation(knife)
-            anim.track = nil
+            anim.tool, anim.source, anim.track = knife, findThrowAnimation(knife), nil
         end
-        if not anim.source then return end
+        if not anim.source then return nil end
 
         local animator = animatorOf(U.charOf(LocalPlayer))
-        if not animator then return end
+        if not animator then return nil end
         if anim.animator ~= animator then
             anim.animator, anim.track = animator, nil
         end
         if not anim.track then
             local ok, track = pcall(function() return animator:LoadAnimation(anim.source) end)
-            if not ok or not track then return end
+            if not ok or not track then return nil end
             anim.track = track
         end
-
-        -- Restart rather than stack: two presses in quick succession should
-        -- look like two throws, not one blended into itself.
-        pcall(function()
-            if anim.track.IsPlaying then anim.track:Stop(0) end
-            anim.track:Play(0.05)
-        end)
+        return anim.track
     end
 
-    function Game.throwKnife(targetPos)
+    -- Nobody throws a knife on the first frame of the wind-up. Play it, then
+    -- say how long the knife should stay in the hand — the arm has to come back
+    -- before anything leaves it, and firing the remote immediately is what made
+    -- the throw read as a script no matter how good the animation looked.
+    --
+    -- A hard ceiling regardless of the slider: a knife still in your hand most
+    -- of a second after you decided to throw it is a bug, not a style.
+    local RELEASE_CAP = 0.75
+
+    local function playThrowAnimation()
+        if not KH.S.Knife.ThrowAnim then return 0 end
+        local track = Game.primeThrowAnimation()
+        if not track then return 0 end
+
+        -- Restart rather than stack: two throws in quick succession should look
+        -- like two throws, not one blended into itself.
+        local ok = pcall(function()
+            if track.IsPlaying then track:Stop(0) end
+            track:Play(0.05)
+        end)
+        if not ok then return 0 end
+
+        -- Still no length means the asset has not landed yet. That throw goes
+        -- out immediately rather than waiting on a delay nothing can measure —
+        -- exactly what it did before the animation existed.
+        local length = track.Length
+        if typeof(length) ~= "number" or length <= 0 then return 0 end
+
+        local point = U.clamp((KH.S.Knife.ThrowRelease or 55) / 100, 0, 1)
+        return math.min(length * point, RELEASE_CAP)
+    end
+
+    -- Leaving a wind-up frozen on the character is the one thing unloading
+    -- must not do.
+    KH.undo(function()
+        if anim.track then pcall(function() anim.track:Stop(0) end) end
+    end)
+
+    -- One throw in the air at a time. The hold below yields, and a second call
+    -- landing inside it would restart the animation under a knife that has
+    -- already been committed.
+    local holding = false
+
+    -- `refresh`, when given, is asked for the aim again at the moment the knife
+    -- actually leaves the hand. Without it a held throw would fly at wherever
+    -- the target stood when the arm started moving.
+    function Game.throwKnife(targetPos, refresh)
+        if holding then return false, "mid-throw" end
+
         local knife, equipped = Game.knifeTool()
         if not knife then return false, "no knife" end
         if not equipped and not Game.equip(knife) then return false, "could not equip" end
@@ -626,19 +671,42 @@ do
         if not thrown then thrown = knife:FindFirstChild("Throw") end
         if not thrown or not thrown:IsA("RemoteEvent") then return false, "no throw remote" end
 
+        -- Built at the moment of release, not before it: both the hand and the
+        -- target have moved by then.
+        --
         -- Orientation, not just position: MM2 flies the knife along the CFrame
         -- it is handed, and a bare CFrame.new(position) faces down the world
         -- axis rather than at the target. Degenerate when the two points
         -- coincide, so that case keeps the old bare frame.
-        local from = CFrame.new(hand.Position)
-        if (targetPos - hand.Position).Magnitude > 0.5 then
-            from = CFrame.new(hand.Position, targetPos)
+        local function send(point)
+            local from = CFrame.new(hand.Position)
+            if (point - hand.Position).Magnitude > 0.5 then
+                from = CFrame.new(hand.Position, point)
+            end
+            pcall(function()
+                thrown:FireServer(from, CFrame.new(point) * (from - from.Position))
+            end)
         end
-        -- Animate and fire together. The wind-up is cosmetic and replicates on
-        -- its own thread, so the knife must not wait on it.
-        playThrowAnimation(knife)
-        pcall(function()
-            thrown:FireServer(from, CFrame.new(targetPos) * (from - from.Position))
+
+        local hold = playThrowAnimation()
+        if hold <= 0 then
+            send(targetPos)
+            return true
+        end
+
+        holding = true
+        KH.detach(function()
+            -- pcall, or one error leaves the flag stuck on forever.
+            pcall(function()
+                task.wait(hold)
+                -- Dying mid-wind-up, stowing the knife, or unloading the script
+                -- cancels the throw rather than firing a remote from a hand
+                -- that is not there any more.
+                if not KH.Alive then return end
+                if not (hand.Parent and knife.Parent == U.charOf(LocalPlayer)) then return end
+                send(refresh and refresh() or targetPos)
+            end)
+            holding = false
         end)
         return true
     end

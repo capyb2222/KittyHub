@@ -172,7 +172,12 @@ do
         }))
         UI.toggle(throwing, opt("Knife", "ThrowAnim", {
             text = "Throw Animation",
-            desc = "Play MM2's own wind-up with the throw. Without it the knife leaves a character that never moved, which is what a scripted throw looks like to everyone watching.",
+            desc = "Play MM2's own wind-up, and hold the knife until the arm has actually swung. Without it the knife leaves a character that never moved, which is what a scripted throw looks like to everyone watching.",
+        }))
+        UI.slider(throwing, opt("Knife", "ThrowRelease", {
+            text = "Release Point",
+            desc = "How far into the wind-up the knife leaves your hand, as a share of the animation. Lower throws sooner and looks more scripted; higher looks right but costs you that long before the knife is in the air. Capped at three quarters of a second whatever this says.",
+            min = 0, max = 100, step = 5, suffix = "%",
         }))
         UI.button(throwing, {
             text = "Throw Now",

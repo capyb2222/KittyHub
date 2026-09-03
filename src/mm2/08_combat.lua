@@ -1248,10 +1248,14 @@ do
         return target ~= nil and target.distance <= (S.Knife.ThrowRange or 70)
     end
 
+    -- Asked once now, for the throw that goes straight out, and again at the
+    -- release when the animation holds the knife back. Same aim either way.
     local function throwAt(target)
-        local point = U.predict(target.char, S.Aim.Prediction + 1, S.Aim.PingComp)
-            or target.part.Position
-        return Game.throwKnife(point)
+        local function point()
+            return U.predict(target.char, S.Aim.Prediction + 1, S.Aim.PingComp)
+                or target.part.Position
+        end
+        return Game.throwKnife(point(), point)
     end
 
     function Combat.throwAtNearest()
@@ -1337,6 +1341,16 @@ do
         if not Game.knifeTool() then return end
         Combat.throwAtNearest()
         task.wait(math.max(S.Knife.ThrowDelay, 0.2))
+    end)
+
+    -- Load the throw animation before it is first needed. Its length is what
+    -- the release is measured from, and that reads zero until Roblox has the
+    -- asset — which would leave the first throw of every round the one that
+    -- goes out on frame one.
+    KH.loop(1, function()
+        if not S.Knife.ThrowAnim then return end
+        local knife = Game.knifeTool()
+        if knife then Game.primeThrowAnimation(knife) end
     end)
 
     -- Knife aura: stab anything that wanders into range.
