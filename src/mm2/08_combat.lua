@@ -1181,10 +1181,16 @@ do
     end
 
     -- =============================================================== KNIFE
-    local function knifeTargets()
+    -- `sheriffFirst` is the bound-key path asking for the gun holder whatever
+    -- the Target Filter toggles say: pressing the throw key is a deliberate
+    -- call, and the one target worth spending the knife on is the one who can
+    -- shoot back.
+    local function knifeTargets(sheriffFirst)
         local out = {}
         local myRoot = U.myRoot()
         if not myRoot then return out end
+
+        local skipSheriff = S.Knife.SkipSheriff and not sheriffFirst
 
         for _, player in ipairs(U.otherPlayers()) do
             if Game.isAlive(player) then
@@ -1192,7 +1198,7 @@ do
                 local isSheriff = (role == "Sheriff" or role == "Hero")
                 -- Prioritising the sheriff is the sort's job, below. Filtering
                 -- here as well left an empty list whenever no sheriff was alive.
-                if not (S.Knife.SkipSheriff and isSheriff) then
+                if not (skipSheriff and isSheriff) then
                     local char = U.charOf(player)
                     local part = char and U.torsoOf(char)
                     if part then
@@ -1207,23 +1213,100 @@ do
         end
 
         -- Sheriff first when asked for, then by proximity.
+        local preferSheriff = sheriffFirst or S.Knife.TargetSheriff
         table.sort(out, function(a, b)
-            if S.Knife.TargetSheriff and a.sheriff ~= b.sheriff then return a.sheriff end
+            if preferSheriff and a.sheriff ~= b.sheriff then return a.sheriff end
             return a.distance < b.distance
         end)
         return out
     end
     Combat.knifeTargets = knifeTargets
 
+    -- A thrown knife is gone until it comes back, so it is only worth throwing
+    -- at a range the throw can actually cover.
+    local function inThrowRange(target)
+        return target ~= nil and target.distance <= (S.Knife.ThrowRange or 70)
+    end
+
+    local function throwAt(target)
+        local point = U.predict(target.char, S.Aim.Prediction + 1, S.Aim.PingComp)
+            or target.part.Position
+        return Game.throwKnife(point)
+    end
+
     function Combat.throwAtNearest()
         if not Game.knifeTool() then return false end
         local target = knifeTargets()[1]
-        if not target then return false end
-        -- A thrown knife is gone until it comes back, so it is only worth
-        -- throwing at a range the throw can actually cover.
-        if target.distance > (S.Knife.ThrowRange or 70) then return false end
-        local point = U.predict(target.char, S.Aim.Prediction + 1, S.Aim.PingComp) or target.part.Position
-        return Game.throwKnife(point)
+        if not inThrowRange(target) then return false end
+        return throwAt(target)
+    end
+
+    -- The sheriff when the throw can reach them, otherwise the closest target
+    -- it can: the list already runs sheriff-then-distance, so the first entry
+    -- in range is the right one. Refusing outright because the only sheriff is
+    -- across the map would make the key feel dead with someone stood in front
+    -- of you.
+    local function pickThrowTarget()
+        for _, target in ipairs(knifeTargets(true)) do
+            if inThrowRange(target) then return target end
+        end
+        return nil
+    end
+
+    -- ------------------------------------------------------ bound-key throw
+    -- One press, one throw — no loop, no repeat, no cooldown beyond the draw
+    -- it may have to wait for. The flag only covers that draw: while the knife
+    -- is already out the whole thing runs inline on the pressing frame, which
+    -- is as fast as a throw can be sent.
+    local drawing = false
+
+    function Combat.throwOnce(announce)
+        local function refuse(text, kind)
+            if announce then
+                UI.notify({title = "Knife", text = text, kind = kind or "warn"})
+            end
+            return false
+        end
+
+        -- A second press during the draw would put two knives in the air off
+        -- one keystroke.
+        if drawing then return false end
+
+        local knife, equipped = Game.knifeTool()
+        if not knife then return refuse("You have no knife.", "bad") end
+
+        local target = pickThrowTarget()
+        if not target then return refuse("Nobody alive within throwing range.") end
+
+        -- Already drawn: send it now rather than a frame later.
+        if equipped then return throwAt(target) end
+
+        -- Not drawn. EquipTool is not instant and the server drops a throw from
+        -- a knife it does not yet think we hold, so wait for the tool to land
+        -- in the character first. It stays out afterwards — nothing here stows
+        -- it again, and the next press skips this branch entirely.
+        drawing = true
+        KH.detach(function()
+            -- pcall, or one error leaves the flag stuck on forever.
+            pcall(function()
+                if not Game.equip(knife) then return end
+
+                local char = U.charOf(LocalPlayer)
+                local began = os.clock()
+                while knife.Parent ~= char and os.clock() - began < 0.35 do
+                    task.wait()
+                    char = U.charOf(LocalPlayer)
+                end
+                if knife.Parent ~= char then return end
+
+                -- Re-pick: the wait is short, but a target can die or walk out
+                -- of range inside it and a stale point throws the knife away.
+                local fresh = pickThrowTarget()
+                if fresh then throwAt(fresh) end
+            end)
+            drawing = false
+        end)
+        return true
     end
 
     -- Auto throw

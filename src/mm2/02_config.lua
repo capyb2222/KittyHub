@@ -35,6 +35,7 @@ do
             AutoThrow     = false,
             ThrowDelay    = 1.2,
             ThrowRange    = 70,          -- past this the knife is just thrown away
+            ThrowKey      = "G",         -- one press, one throw
             Aura          = false,
             AuraRadius    = 18,
             AuraDelay     = 0.15,

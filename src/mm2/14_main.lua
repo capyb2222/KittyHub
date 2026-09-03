@@ -27,6 +27,9 @@ do
     end)
     UI.registerKeybind("Noclip", function() return S.Move.NoclipKey end, function() return S.Move.Noclip end)
     UI.registerKeybind("Fly", function() return S.Move.FlyKey end, function() return S.Move.Fly end)
+    -- No lit state: the throw is a single action, over before the panel would
+    -- be redrawn, so the chip just carries the key.
+    UI.registerKeybind("Throw Knife", function() return S.Knife.ThrowKey end)
     UI.refreshKeybinds()
 
     KH.track(UserInputService.InputBegan:Connect(function(input, processed)
@@ -49,6 +52,13 @@ do
         if key == U.keyCode(S.Move.FlyKey) then
             Move.setFly(not S.Move.Fly)
             UI.refreshAll()
+            return
+        end
+        -- One throw per press. InputBegan does not auto-repeat, so holding the
+        -- key throws once and then nothing until it is released and pressed
+        -- again — which is the whole point of it not being the auto-throw loop.
+        if key == U.keyCode(S.Knife.ThrowKey) then
+            Combat.throwOnce(true)
             return
         end
         -- In Toggle mode the aim key arms the aimbot rather than firing once.
@@ -261,6 +271,6 @@ do
     })
 
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
-    print(("[Kitty Hub] [%s] menu · [%s] aim · [%s] noclip · [%s] fly")
-        :format(S.UI.MenuKey, S.Aim.Key, S.Move.NoclipKey, S.Move.FlyKey))
+    print(("[Kitty Hub] [%s] menu · [%s] aim · [%s] noclip · [%s] fly · [%s] throw knife")
+        :format(S.UI.MenuKey, S.Aim.Key, S.Move.NoclipKey, S.Move.FlyKey, S.Knife.ThrowKey))
 end

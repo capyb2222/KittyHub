@@ -158,13 +158,13 @@ do
             desc = "Do not throw at anyone further away than this. The knife is gone until it comes back, so a throw that cannot reach costs you the weapon for nothing.",
             min = 20, max = 200, step = 5, suffix = " studs",
         }))
+        UI.keybind(throwing, opt("Knife", "ThrowKey", {
+            text = "Throw Key",
+            desc = "One press, one throw, at the sheriff if one is alive. Draws the knife first when it is not already out and then leaves it out — after that the tool is yours again.",
+        }))
         UI.button(throwing, {
             text = "Throw Now",
-            callback = function()
-                if not Combat.throwAtNearest() then
-                    UI.notify({title = "Knife", text = "No knife or no target.", kind = "warn"})
-                end
-            end,
+            callback = function() Combat.throwOnce(true) end,
         })
 
         local melee = UI.section(tab, "Melee")
