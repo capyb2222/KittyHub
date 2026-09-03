@@ -32,8 +32,9 @@ do
             NotifyShot    = false,
         },
         Knife = {
-            AutoThrow     = false,
-            ThrowDelay    = 1.2,
+            AutoThrow     = false,       -- master switch, like Aim.Enabled
+            ThrowMode     = "Press",     -- Press | Always
+            ThrowDelay    = 1.2,         -- Always mode only
             ThrowRange    = 70,          -- past this the knife is just thrown away
             ThrowKey      = "G",         -- one press, one throw
             Aura          = false,

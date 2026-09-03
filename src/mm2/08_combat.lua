@@ -1309,9 +1309,11 @@ do
         return true
     end
 
-    -- Auto throw
+    -- Auto throw, Always mode only — in Press mode the bound key is the
+    -- trigger and a timer running underneath it would throw knives the user
+    -- never asked for.
     KH.loop(0.1, function()
-        if not S.Knife.AutoThrow then return end
+        if not (S.Knife.AutoThrow and S.Knife.ThrowMode == "Always") then return end
         if not Game.knifeTool() then return end
         Combat.throwAtNearest()
         task.wait(math.max(S.Knife.ThrowDelay, 0.2))

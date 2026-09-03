@@ -147,23 +147,32 @@ do
 
         local throwing = UI.section(tab, "Throwing")
         UI.toggle(throwing, opt("Knife", "AutoThrow", {
-            text = "Auto Throw",
-            desc = "Throw at the closest valid target on a timer.",
+            text = "Auto Throw Enabled",
+            desc = "Master switch for automatic throwing. The throw key does nothing while this is off.",
+        }))
+        UI.dropdown(throwing, opt("Knife", "ThrowMode", {
+            text = "Trigger",
+            desc = "Press: one throw per key press, and nothing at all in between. Always: throws on the delay timer below and ignores the key.",
+            options = {"Press", "Always"},
+            onSet = function() UI.refreshKeybinds() end,
+        }))
+        UI.keybind(throwing, opt("Knife", "ThrowKey", {
+            text = "Throw Key",
+            desc = "Press mode only. One press, one throw, at the sheriff if one is in range. Draws the knife first when it is not already out and then leaves it out — after that the tool is yours again.",
         }))
         UI.slider(throwing, opt("Knife", "ThrowDelay", {
-            text = "Throw Delay", min = 0.2, max = 5, step = 0.1, suffix = "s",
+            text = "Throw Delay",
+            desc = "Seconds between throws in Always mode. Press mode does not use it.",
+            min = 0.2, max = 5, step = 0.1, suffix = "s",
         }))
         UI.slider(throwing, opt("Knife", "ThrowRange", {
             text = "Throw Range",
             desc = "Do not throw at anyone further away than this. The knife is gone until it comes back, so a throw that cannot reach costs you the weapon for nothing.",
             min = 20, max = 200, step = 5, suffix = " studs",
         }))
-        UI.keybind(throwing, opt("Knife", "ThrowKey", {
-            text = "Throw Key",
-            desc = "One press, one throw, at the sheriff if one is alive. Draws the knife first when it is not already out and then leaves it out — after that the tool is yours again.",
-        }))
         UI.button(throwing, {
             text = "Throw Now",
+            desc = "Throws once whatever the switch above is set to.",
             callback = function() Combat.throwOnce(true) end,
         })
 

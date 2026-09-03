@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Murder Mystery 2 Script
---   build 3.0.0+18cae35a  ·  2026-09-03 00:30 UTC
+--   build 3.0.0+afe47f39  ·  2026-09-03 00:45 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
@@ -207,8 +207,9 @@ do
             NotifyShot    = false,
         },
         Knife = {
-            AutoThrow     = false,
-            ThrowDelay    = 1.2,
+            AutoThrow     = false,       -- master switch, like Aim.Enabled
+            ThrowMode     = "Press",     -- Press | Always
+            ThrowDelay    = 1.2,         -- Always mode only
             ThrowRange    = 70,          -- past this the knife is just thrown away
             ThrowKey      = "G",         -- one press, one throw
             Aura          = false,
@@ -4636,9 +4637,11 @@ do
         return true
     end
 
-    -- Auto throw
+    -- Auto throw, Always mode only — in Press mode the bound key is the
+    -- trigger and a timer running underneath it would throw knives the user
+    -- never asked for.
     KH.loop(0.1, function()
-        if not S.Knife.AutoThrow then return end
+        if not (S.Knife.AutoThrow and S.Knife.ThrowMode == "Always") then return end
         if not Game.knifeTool() then return end
         Combat.throwAtNearest()
         task.wait(math.max(S.Knife.ThrowDelay, 0.2))
@@ -5861,23 +5864,32 @@ do
 
         local throwing = UI.section(tab, "Throwing")
         UI.toggle(throwing, opt("Knife", "AutoThrow", {
-            text = "Auto Throw",
-            desc = "Throw at the closest valid target on a timer.",
+            text = "Auto Throw Enabled",
+            desc = "Master switch for automatic throwing. The throw key does nothing while this is off.",
+        }))
+        UI.dropdown(throwing, opt("Knife", "ThrowMode", {
+            text = "Trigger",
+            desc = "Press: one throw per key press, and nothing at all in between. Always: throws on the delay timer below and ignores the key.",
+            options = {"Press", "Always"},
+            onSet = function() UI.refreshKeybinds() end,
+        }))
+        UI.keybind(throwing, opt("Knife", "ThrowKey", {
+            text = "Throw Key",
+            desc = "Press mode only. One press, one throw, at the sheriff if one is in range. Draws the knife first when it is not already out and then leaves it out — after that the tool is yours again.",
         }))
         UI.slider(throwing, opt("Knife", "ThrowDelay", {
-            text = "Throw Delay", min = 0.2, max = 5, step = 0.1, suffix = "s",
+            text = "Throw Delay",
+            desc = "Seconds between throws in Always mode. Press mode does not use it.",
+            min = 0.2, max = 5, step = 0.1, suffix = "s",
         }))
         UI.slider(throwing, opt("Knife", "ThrowRange", {
             text = "Throw Range",
             desc = "Do not throw at anyone further away than this. The knife is gone until it comes back, so a throw that cannot reach costs you the weapon for nothing.",
             min = 20, max = 200, step = 5, suffix = " studs",
         }))
-        UI.keybind(throwing, opt("Knife", "ThrowKey", {
-            text = "Throw Key",
-            desc = "One press, one throw, at the sheriff if one is alive. Draws the knife first when it is not already out and then leaves it out — after that the tool is yours again.",
-        }))
         UI.button(throwing, {
             text = "Throw Now",
+            desc = "Throws once whatever the switch above is set to.",
             callback = function() Combat.throwOnce(true) end,
         })
 
@@ -6532,9 +6544,12 @@ do
     end)
     UI.registerKeybind("Noclip", function() return S.Move.NoclipKey end, function() return S.Move.Noclip end)
     UI.registerKeybind("Fly", function() return S.Move.FlyKey end, function() return S.Move.Fly end)
-    -- No lit state: the throw is a single action, over before the panel would
-    -- be redrawn, so the chip just carries the key.
-    UI.registerKeybind("Throw Knife", function() return S.Knife.ThrowKey end)
+    -- Lit when the key is actually armed: the throw itself is over before the
+    -- panel would be redrawn, so what the chip is worth showing is whether the
+    -- press will do anything at all.
+    UI.registerKeybind("Throw Knife", function() return S.Knife.ThrowKey end, function()
+        return S.Knife.AutoThrow and S.Knife.ThrowMode == "Press"
+    end)
     UI.refreshKeybinds()
 
     KH.track(UserInputService.InputBegan:Connect(function(input, processed)
@@ -6559,11 +6574,12 @@ do
             UI.refreshAll()
             return
         end
-        -- One throw per press. InputBegan does not auto-repeat, so holding the
-        -- key throws once and then nothing until it is released and pressed
-        -- again — which is the whole point of it not being the auto-throw loop.
-        if key == U.keyCode(S.Knife.ThrowKey) then
-            Combat.throwOnce(true)
+        -- Armed by the Auto Throw switch, the same way the aim key is armed by
+        -- Aimbot Enabled. One throw per press: InputBegan does not auto-repeat,
+        -- so holding the key throws once and then nothing until it is released
+        -- and pressed again. Always mode leaves the key alone — the loop has it.
+        if key == U.keyCode(S.Knife.ThrowKey) and S.Knife.AutoThrow then
+            if S.Knife.ThrowMode == "Press" then Combat.throwOnce(true) end
             return
         end
         -- In Toggle mode the aim key arms the aimbot rather than firing once.

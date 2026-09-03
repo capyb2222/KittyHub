@@ -27,9 +27,12 @@ do
     end)
     UI.registerKeybind("Noclip", function() return S.Move.NoclipKey end, function() return S.Move.Noclip end)
     UI.registerKeybind("Fly", function() return S.Move.FlyKey end, function() return S.Move.Fly end)
-    -- No lit state: the throw is a single action, over before the panel would
-    -- be redrawn, so the chip just carries the key.
-    UI.registerKeybind("Throw Knife", function() return S.Knife.ThrowKey end)
+    -- Lit when the key is actually armed: the throw itself is over before the
+    -- panel would be redrawn, so what the chip is worth showing is whether the
+    -- press will do anything at all.
+    UI.registerKeybind("Throw Knife", function() return S.Knife.ThrowKey end, function()
+        return S.Knife.AutoThrow and S.Knife.ThrowMode == "Press"
+    end)
     UI.refreshKeybinds()
 
     KH.track(UserInputService.InputBegan:Connect(function(input, processed)
@@ -54,11 +57,12 @@ do
             UI.refreshAll()
             return
         end
-        -- One throw per press. InputBegan does not auto-repeat, so holding the
-        -- key throws once and then nothing until it is released and pressed
-        -- again — which is the whole point of it not being the auto-throw loop.
-        if key == U.keyCode(S.Knife.ThrowKey) then
-            Combat.throwOnce(true)
+        -- Armed by the Auto Throw switch, the same way the aim key is armed by
+        -- Aimbot Enabled. One throw per press: InputBegan does not auto-repeat,
+        -- so holding the key throws once and then nothing until it is released
+        -- and pressed again. Always mode leaves the key alone — the loop has it.
+        if key == U.keyCode(S.Knife.ThrowKey) and S.Knife.AutoThrow then
+            if S.Knife.ThrowMode == "Press" then Combat.throwOnce(true) end
             return
         end
         -- In Toggle mode the aim key arms the aimbot rather than firing once.
