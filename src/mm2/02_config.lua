@@ -37,6 +37,7 @@ do
             ThrowDelay    = 1.2,         -- Always mode only
             ThrowRange    = 70,          -- past this the knife is just thrown away
             ThrowKey      = "G",         -- one press, one throw
+            ThrowAnim     = true,        -- play MM2's own wind-up with the throw
             Aura          = false,
             AuraRadius    = 18,
             AuraDelay     = 0.15,

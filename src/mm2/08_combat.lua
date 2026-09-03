@@ -315,7 +315,10 @@ do
 
         local TOLERANCE = 4     -- pixel floor for "close enough"
         local NEAR_STUDS = 4.5  -- how far off them a landed ray may stop
-        local MAX_STEPS = 40
+        -- A ceiling on the loop, not the real limit — the clock below is that.
+        -- Forty steps is under a third of a second at 144 fps, which quietly
+        -- undid the budget for anyone running a high refresh rate.
+        local MAX_STEPS = 90
 
         -- Every lead below is counted in frames of the walk, so a 30 fps client
         -- leads twice as far as a 144 fps one.
@@ -350,12 +353,24 @@ do
             return project(livePoint(part))
         end
 
-        -- How big they look from here. The cursor has to end up on their body,
-        -- not on a point: four pixels is nothing to a target crossing twenty a
-        -- frame, and the walk would never call itself close enough.
-        local function bodyRadius(part, point)
+        -- How big they look from here, in pixels. The cursor has to end up on
+        -- their body, not on a point: four pixels is nothing to a target
+        -- crossing twenty a frame, and the walk would never call itself close
+        -- enough.
+        --
+        -- Measured to the top of their head, not to the top of the part being
+        -- aimed at. HumanoidRootPart is a two-stud brick at the middle of a
+        -- six-stud body, so reading its half-height gave a figure about a third
+        -- of the truth — and every tolerance below is a fraction of this one.
+        -- Too small, and the walk keeps correcting a cursor already on them
+        -- while the lead is capped somewhere inside their own hitbox: exactly
+        -- the case of a target who will not hold still.
+        local function bodyRadius(char, part, point)
             local ok, edge = pcall(function()
-                return project(part.Position + Vector3.new(0, part.Size.Y * 0.5, 0))
+                local head = char and char:FindFirstChild("Head")
+                local top = head and (head.Position + Vector3.new(0, head.Size.Y * 0.5, 0))
+                    or (part.Position + Vector3.new(0, part.Size.Y * 0.5, 0))
+                return project(top)
             end)
             if not ok then return TOLERANCE end
             return U.clamp((edge - point).Magnitude, TOLERANCE, 150)
@@ -413,7 +428,7 @@ do
 
                     -- The cursor sits dead centre, so the distance from the
                     -- centre to them is the whole aiming error.
-                    if onBody or (point - centre).Magnitude <= bodyRadius(part, point) * 0.75 then
+                    if onBody or (point - centre).Magnitude <= bodyRadius(char, part, point) * 0.75 then
                         local blocker = not onBody and hit and hit:FindFirstAncestorOfClass("Model")
                         local owner = blocker and Players:GetPlayerFromCharacter(blocker)
                         if owner and owner ~= LocalPlayer then
@@ -448,7 +463,12 @@ do
             if not Mouse.CanMove then return false, "no mouse control" end
             if not waitVisible(part) then return false, "off screen" end
 
-            local budget = os.clock() + 0.3
+            -- A target standing still is reached in two or three frames and
+            -- never sees this. It is the one jumping and strafing that needs
+            -- the frames, and a fifth of a second was not enough of them to
+            -- catch someone mid-jump: the walk ran out of budget on the way up
+            -- and reported that it could not reach them.
+            local budget = os.clock() + 0.45
             -- The click lands a frame after the cursor does, and MM2 casts its
             -- own ray then rather than now.
             local pingLead = S.Aim.PingComp and U.clamp(U.ping() / 3000, 0, 0.06) or 0
@@ -497,7 +517,7 @@ do
                     -- landed, a frame later again. Never past their body edge
                     -- either way: MM2 shoots wherever the cursor's ray stops, so
                     -- a lead that overshoots them sends the wall behind instead.
-                    local radius = bodyRadius(part, now)
+                    local radius = bodyRadius(char, part, now)
                     local function ahead(seconds)
                         local point, ok = project(livePoint(part, seconds))
                         if not ok then return now end

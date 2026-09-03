@@ -170,6 +170,10 @@ do
             desc = "Do not throw at anyone further away than this. The knife is gone until it comes back, so a throw that cannot reach costs you the weapon for nothing.",
             min = 20, max = 200, step = 5, suffix = " studs",
         }))
+        UI.toggle(throwing, opt("Knife", "ThrowAnim", {
+            text = "Throw Animation",
+            desc = "Play MM2's own wind-up with the throw. Without it the knife leaves a character that never moved, which is what a scripted throw looks like to everyone watching.",
+        }))
         UI.button(throwing, {
             text = "Throw Now",
             desc = "Throws once whatever the switch above is set to.",

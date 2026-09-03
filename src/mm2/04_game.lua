@@ -548,6 +548,68 @@ do
         return true
     end
 
+    -- ------------------------------------------------------ throw animation
+    -- The throw remote makes the knife fly; it does nothing to your character.
+    -- MM2 plays the wind-up from its own client script, off an input we never
+    -- make, so a scripted throw looks like a knife leaving a statue's hand.
+    --
+    -- The asset id is never hardcoded — it is read off whatever animation MM2
+    -- ships on the tool, so a game update that renames or replaces it is
+    -- picked up rather than silently played wrong. Resolved once per knife and
+    -- loaded once per character: a throw pays for none of this twice.
+    local anim = {tool = nil, source = nil, animator = nil, track = nil}
+
+    local function findThrowAnimation(knife)
+        local only, count
+        for _, inst in ipairs(knife:GetDescendants()) do
+            if inst:IsA("Animation") and inst.AnimationId ~= "" then
+                if inst.Name:lower():find("throw") or inst.Name:lower():find("toss") then
+                    return inst
+                end
+                count, only = (count or 0) + 1, inst
+            end
+        end
+        -- One animation on a throwing knife is the throw. Two or more and
+        -- guessing means playing a stab or an idle instead, which looks worse
+        -- than playing nothing.
+        return count == 1 and only or nil
+    end
+
+    local function animatorOf(char)
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return nil end
+        return hum:FindFirstChildOfClass("Animator") or hum
+    end
+
+    local function playThrowAnimation(knife)
+        if not KH.S.Knife.ThrowAnim then return end
+
+        if anim.tool ~= knife then
+            anim.tool = knife
+            anim.source = findThrowAnimation(knife)
+            anim.track = nil
+        end
+        if not anim.source then return end
+
+        local animator = animatorOf(U.charOf(LocalPlayer))
+        if not animator then return end
+        if anim.animator ~= animator then
+            anim.animator, anim.track = animator, nil
+        end
+        if not anim.track then
+            local ok, track = pcall(function() return animator:LoadAnimation(anim.source) end)
+            if not ok or not track then return end
+            anim.track = track
+        end
+
+        -- Restart rather than stack: two presses in quick succession should
+        -- look like two throws, not one blended into itself.
+        pcall(function()
+            if anim.track.IsPlaying then anim.track:Stop(0) end
+            anim.track:Play(0.05)
+        end)
+    end
+
     function Game.throwKnife(targetPos)
         local knife, equipped = Game.knifeTool()
         if not knife then return false, "no knife" end
@@ -572,6 +634,9 @@ do
         if (targetPos - hand.Position).Magnitude > 0.5 then
             from = CFrame.new(hand.Position, targetPos)
         end
+        -- Animate and fire together. The wind-up is cosmetic and replicates on
+        -- its own thread, so the knife must not wait on it.
+        playThrowAnimation(knife)
         pcall(function()
             thrown:FireServer(from, CFrame.new(targetPos) * (from - from.Position))
         end)
