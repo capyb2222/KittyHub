@@ -203,7 +203,7 @@ do
         for _, child in ipairs(scripts and scripts:GetChildren() or {}) do
             names[#names + 1] = child.ClassName .. ":" .. child.Name
         end
-        say("PlayerScripts = " .. trim(table.concat(names, " "), 400))
+        say("PlayerScripts = " .. trim(table.concat(names, " "), 1200))
 
         local found = {}
         for name, value in pairs(M) do
@@ -217,53 +217,62 @@ do
         if specs then for _ in pairs(specs) do count = count + 1 end end
         say("circle action specs = " .. (specs and count or "unreachable"))
 
-        -- Anything whose constants mention a position check, and where it
-        -- lives. The archived name for it no longer matches, so this looks
-        -- wider and reports what it actually finds.
-        if not (collect and getConstants and isLClosure) then
-            say("no closure access, cannot look for the check")
-            return
-        end
+        -- Zero candidates last time, which cannot be true of a game this size.
+        -- So before looking for anything, establish whether these functions
+        -- return anything at all — a stub and a miss look identical otherwise.
+        local function marker() return "kittyhub_probe_constant" end
 
-        local WORDS = {"pcall", "anticheat", "anti_cheat", "cheat", "teleport",
-                       "kick", "flag", "detect", "suspicious", "rollback"}
-        local hits, total = {}, 0
-        local ok, objects = pcall(collect)
-        if not ok or type(objects) ~= "table" then
-            say("gc dump unavailable")
-            return
-        end
+        local okc, consts = pcall(function() return getConstants and getConstants(marker) end)
+        say(("getconstants on our own function = %s"):format(
+            (okc and type(consts) == "table") and (#consts .. " constants") or "failed"))
 
-        for index, fn in ipairs(objects) do
-            local lua = false
-            pcall(function() lua = type(fn) == "function" and isLClosure(fn) end)
-            if lua then
-                local consts
-                pcall(function() consts = getConstants(fn) end)
-                if type(consts) == "table" then
-                    for _, value in ipairs(consts) do
-                        if type(value) == "string" and #value < 40 then
-                            local low = value:lower()
-                            for _, word in ipairs(WORDS) do
-                                if low:find(word, 1, true) then
-                                    total = total + 1
-                                    if #hits < 14 then
-                                        local where = "?"
-                                        pcall(function() where = tostring(getfenv(fn).script) end)
-                                        hits[#hits + 1] = value .. "@" .. where:match("[^%.]+$")
-                                    end
-                                    break
-                                end
-                            end
-                        end
-                    end
-                end
+        local okl, isLua = pcall(function() return isLClosure and isLClosure(marker) end)
+        say(("islclosure on our own function = %s"):format(
+            okl and tostring(isLua) or "failed"))
+
+        if not collect then say("no getgc") return end
+
+        local function measure(label, ...)
+            local ok, dump = pcall(collect, ...)
+            if not ok or type(dump) ~= "table" then
+                say(label .. " = failed")
+                return
             end
-            if index % 4000 == 0 then task.wait() end
+            local funcs, tables, lua, withConsts = 0, 0, 0, 0
+            for index, object in ipairs(dump) do
+                local kind = type(object)
+                if kind == "function" then
+                    funcs = funcs + 1
+                    local ok2, flag = pcall(function() return isLClosure and isLClosure(object) end)
+                    if ok2 and flag then
+                        lua = lua + 1
+                        local ok3, c = pcall(function() return getConstants(object) end)
+                        if ok3 and type(c) == "table" then withConsts = withConsts + 1 end
+                    end
+                elseif kind == "table" then
+                    tables = tables + 1
+                end
+                if index % 4000 == 0 then task.wait() end
+            end
+            say(("%s = %d objects, %d functions, %d lua closures, %d readable, %d tables")
+                :format(label, #dump, funcs, lua, withConsts, tables))
         end
 
-        say(("check candidates = %d"):format(total))
-        say("samples = " .. trim(table.concat(hits, " | "), 700))
+        measure("getgc()")
+        measure("getgc(true)", true)
+
+        -- And what require actually says at each identity, in its own words.
+        local target = descend(ReplicatedStorage, {"Module", "UI"})
+        if target and setIdentity then
+            for _, id in ipairs({2, 3, 8}) do
+                local restore = Game.identity()
+                pcall(setIdentity, id)
+                local ok, err = pcall(require, target)
+                if restore then pcall(setIdentity, restore) end
+                say(("require Module.UI at identity %d = %s"):format(
+                    id, ok and "ok" or trim(err, 120)))
+            end
+        end
     end
 
     -- --------------------------------------------------------- anti-cheat
