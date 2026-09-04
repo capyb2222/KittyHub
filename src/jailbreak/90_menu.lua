@@ -501,6 +501,7 @@ do
             get = function() return Game.CanScan and "available" or "unavailable" end,
         },
         {text = "Anti-Cheat", get = function() return tostring(Game.AntiCheat) end},
+        {text = "Executor Verdict", get = function() return Game.verdict() end},
         {
             text = "Game Modules",
             get = function()

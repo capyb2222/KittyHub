@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+73ff4d8f  ·  2026-09-04 04:23 UTC
+--   build 3.1.0+cbdf6423  ·  2026-09-04 04:37 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -932,6 +932,28 @@ do
                     id, ok and "ok" or trim(err, 120)))
             end
         end
+    end
+
+    -- Plain English, so any executor can be judged in one load without
+    -- reading a log: everything here needs real Lua objects out of the
+    -- collector, and an executor that cannot supply them cannot run it.
+    function Game.verdict()
+        if not collect then return "no getgc — internals unreachable" end
+        local ok, dump = pcall(collect, true)
+        if not ok or type(dump) ~= "table" then
+            return "getgc failed — internals unreachable"
+        end
+        local lua, walked = 0, 0
+        for _, object in pairs(dump) do
+            walked = walked + 1
+            local kind = type(object)
+            if kind == "function" or kind == "table" then lua = lua + 1 end
+            if walked >= 20000 then break end
+        end
+        if lua == 0 then
+            return ("getgc returns no lua objects (%d checked) — internals unreachable"):format(walked)
+        end
+        return ("getgc works (%d lua objects) — internals reachable"):format(lua)
     end
 
     -- --------------------------------------------------------- anti-cheat
@@ -5503,6 +5525,7 @@ do
             get = function() return Game.CanScan and "available" or "unavailable" end,
         },
         {text = "Anti-Cheat", get = function() return tostring(Game.AntiCheat) end},
+        {text = "Executor Verdict", get = function() return Game.verdict() end},
         {
             text = "Game Modules",
             get = function()

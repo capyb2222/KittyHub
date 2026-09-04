@@ -294,6 +294,28 @@ do
         end
     end
 
+    -- Plain English, so any executor can be judged in one load without
+    -- reading a log: everything here needs real Lua objects out of the
+    -- collector, and an executor that cannot supply them cannot run it.
+    function Game.verdict()
+        if not collect then return "no getgc — internals unreachable" end
+        local ok, dump = pcall(collect, true)
+        if not ok or type(dump) ~= "table" then
+            return "getgc failed — internals unreachable"
+        end
+        local lua, walked = 0, 0
+        for _, object in pairs(dump) do
+            walked = walked + 1
+            local kind = type(object)
+            if kind == "function" or kind == "table" then lua = lua + 1 end
+            if walked >= 20000 then break end
+        end
+        if lua == 0 then
+            return ("getgc returns no lua objects (%d checked) — internals unreachable"):format(walked)
+        end
+        return ("getgc works (%d lua objects) — internals reachable"):format(lua)
+    end
+
     -- --------------------------------------------------------- anti-cheat
     -- Jailbreak's client watches for movement it did not authorise and puts you
     -- back where you were — that pull-back is what noclip and flight run into,
