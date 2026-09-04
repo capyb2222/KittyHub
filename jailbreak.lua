@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+9dfddd38  ·  2026-09-04 02:33 UTC
+--   build 3.1.0+62513a63  ·  2026-09-04 02:47 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -797,6 +797,95 @@ do
             -- one go would freeze the frame it started on.
             if index % 4000 == 0 then task.wait() end
         end
+    end
+
+
+    -- ------------------------------------------------------------- report
+    -- Reconnaissance, written to the console. Everything still unknown about
+    -- this game is something one run of this can answer, and guessing at it
+    -- from the outside has not worked.
+    local function trim(text, limit)
+        text = tostring(text)
+        if #text <= limit then return text end
+        return text:sub(1, limit) .. "…"
+    end
+
+    function Game.report()
+        local say = function(text) print("[KH probe] " .. text) end
+
+        -- Does setting the identity actually do anything, or is it a stub?
+        local before = Game.identity()
+        if setIdentity then pcall(setIdentity, 2) end
+        local during = Game.identity()
+        if setIdentity and before then pcall(setIdentity, before) end
+        say(("identity %s -> %s under set(2)"):format(tostring(before), tostring(during)))
+
+        local scripts = LocalPlayer:FindFirstChild("PlayerScripts")
+        local names = {}
+        for _, child in ipairs(scripts and scripts:GetChildren() or {}) do
+            names[#names + 1] = child.ClassName .. ":" .. child.Name
+        end
+        say("PlayerScripts = " .. trim(table.concat(names, " "), 400))
+
+        local found = {}
+        for name, value in pairs(M) do
+            if value ~= nil then found[#found + 1] = name end
+        end
+        table.sort(found)
+        say("modules = " .. (#found > 0 and table.concat(found, " ") or "none"))
+
+        local specs = Game.specs()
+        local count = 0
+        if specs then for _ in pairs(specs) do count = count + 1 end end
+        say("circle action specs = " .. (specs and count or "unreachable"))
+
+        -- Anything whose constants mention a position check, and where it
+        -- lives. The archived name for it no longer matches, so this looks
+        -- wider and reports what it actually finds.
+        if not (collect and getConstants and isLClosure) then
+            say("no closure access, cannot look for the check")
+            return
+        end
+
+        local WORDS = {"pcall", "anticheat", "anti_cheat", "cheat", "teleport",
+                       "kick", "flag", "detect", "suspicious", "rollback"}
+        local hits, total = {}, 0
+        local ok, objects = pcall(collect)
+        if not ok or type(objects) ~= "table" then
+            say("gc dump unavailable")
+            return
+        end
+
+        for index, fn in ipairs(objects) do
+            local lua = false
+            pcall(function() lua = type(fn) == "function" and isLClosure(fn) end)
+            if lua then
+                local consts
+                pcall(function() consts = getConstants(fn) end)
+                if type(consts) == "table" then
+                    for _, value in ipairs(consts) do
+                        if type(value) == "string" and #value < 40 then
+                            local low = value:lower()
+                            for _, word in ipairs(WORDS) do
+                                if low:find(word, 1, true) then
+                                    total = total + 1
+                                    if #hits < 14 then
+                                        local where = "?"
+                                        pcall(function() where = tostring(getfenv(fn).script) end)
+                                        hits[#hits + 1] = value .. "@" .. where:match("[^%.]+$")
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if index % 4000 == 0 then task.wait() end
+        end
+
+        say(("check candidates = %d"):format(total))
+        say("samples = " .. trim(table.concat(hits, " | "), 700))
     end
 
     -- --------------------------------------------------------- anti-cheat
@@ -5343,6 +5432,8 @@ do
         }))
     end
 
+    KH.FirstTab = "Robbery"
+
     KH.SessionInfo = {
         {text = "Team", get = function() return Game.myTeamName() or "none" end},
         {
@@ -5372,7 +5463,6 @@ do
         },
     }
 
-    KH.FirstTab = "Robbery"
 end
 
 -- ─── src/_shared/91_settings.lua ───────────────────────────────────
@@ -5717,6 +5807,7 @@ do
         print("[Kitty Hub] executor has: " .. (have ~= "" and have or "nothing"))
         print("[Kitty Hub] executor lacks: " .. (missing ~= "" and missing or "nothing"))
         print("[Kitty Hub] anti-cheat: " .. tostring(Game.AntiCheat))
+        KH.safe("report", Game.report)
     end)
 end
 

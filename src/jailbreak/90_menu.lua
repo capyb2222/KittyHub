@@ -484,6 +484,8 @@ do
         }))
     end
 
+    KH.FirstTab = "Robbery"
+
     KH.SessionInfo = {
         {text = "Team", get = function() return Game.myTeamName() or "none" end},
         {
@@ -513,5 +515,4 @@ do
         },
     }
 
-    KH.FirstTab = "Robbery"
 end

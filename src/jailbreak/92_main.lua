@@ -158,5 +158,6 @@ do
         print("[Kitty Hub] executor has: " .. (have ~= "" and have or "nothing"))
         print("[Kitty Hub] executor lacks: " .. (missing ~= "" and missing or "nothing"))
         print("[Kitty Hub] anti-cheat: " .. tostring(Game.AntiCheat))
+        KH.safe("report", Game.report)
     end)
 end
