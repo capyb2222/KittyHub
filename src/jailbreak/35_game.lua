@@ -273,9 +273,12 @@ do
         return gui, node
     end
 
+    -- An amount, not just an enabled gui: if the label ever stops parsing this
+    -- reads as "carrying nothing", which costs a trip to the bank. Trusting
+    -- Enabled alone would instead wedge the rob loop on a bag it cannot empty.
     function Game.carrying()
-        local gui = bagLabel()
-        return gui ~= nil and gui.Enabled == true
+        local have = Game.bag()
+        return have ~= nil and have > 0
     end
 
     function Game.bag()

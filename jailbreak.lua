@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+7b185fd5  ·  2026-09-04 01:08 UTC
+--   build 3.1.0+3b3bce71  ·  2026-09-04 01:12 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -892,9 +892,12 @@ do
         return gui, node
     end
 
+    -- An amount, not just an enabled gui: if the label ever stops parsing this
+    -- reads as "carrying nothing", which costs a trip to the bank. Trusting
+    -- Enabled alone would instead wedge the rob loop on a bag it cannot empty.
     function Game.carrying()
-        local gui = bagLabel()
-        return gui ~= nil and gui.Enabled == true
+        local have = Game.bag()
+        return have ~= nil and have > 0
     end
 
     function Game.bag()
@@ -3632,8 +3635,12 @@ do
     end
 
     -- -------------------------------------------------------------- deposit
+    -- Three failures in a row means the drop-off is not where this thinks it
+    -- is, and retrying forever would stop any more robbing from happening.
+    local bankFails = 0
+
     function Rob.deposit()
-        if not Game.carrying() then return true end
+        if not Game.carrying() then bankFails = 0 return true end
         local base = Game.nearestBase()
         if not base then return false end
 
@@ -3645,7 +3652,19 @@ do
             Rob.fireNearby(S.Rob.InteractRange)
             task.wait(0.25)
         end
-        return not Game.carrying()
+
+        if not Game.carrying() then
+            bankFails = 0
+            return true
+        end
+        bankFails = bankFails + 1
+        if bankFails >= 3 and S.Rob.Deposit then
+            bankFails = 0
+            S.Rob.Deposit = false
+            UI.refreshAll()
+            say("Could not bank the bag — turning that off.", "warn")
+        end
+        return false
     end
 
     -- ------------------------------------------------------------- one job
@@ -3672,7 +3691,9 @@ do
 
             -- One pass of prompts on arrival opens whatever needs opening,
             -- then alternate sweeping the loot with firing what is in reach.
+            local worked = false
             while working(entry, deadline) and not Game.bagFull() do
+                worked = true
                 if S.Rob.AutoInteract then Rob.fireNearby(S.Rob.InteractRange) end
                 if S.Rob.Loot then
                     lootSweep(entry, deadline)
@@ -3682,9 +3703,13 @@ do
                 task.wait(0.2)
             end
 
-            Rob.Runs = Rob.Runs + 1
             if S.Rob.Deposit then Rob.deposit() end
-            say(("Finished %s."):format(entry.name), "good")
+            if worked then
+                Rob.Runs = Rob.Runs + 1
+                say(("Finished %s."):format(entry.name), "good")
+            else
+                say(("%s closed before we got there."):format(entry.name), "warn")
+            end
         end)
 
         Rob.Busy, Rob.Current = false, nil
@@ -4018,14 +4043,20 @@ do
         return workspace:FindFirstChild("Items")
     end
 
+    -- Anything we flew to and failed to collect is parked for a while. Without
+    -- this, one pickup we are not allowed to take is always the nearest one and
+    -- the farm never looks at anything else again.
+    local parked = setmetatable({}, {__mode = "k"})
+
     function Farm.nearestItem()
         local folder = itemsFolder()
         local root = U.myRoot()
         if not folder or not root then return nil end
 
+        local now = os.clock()
         local best, bestDist
         for _, item in ipairs(folder:GetChildren()) do
-            local position = Game.pivotOf(item)
+            local position = (parked[item] or 0) < now and Game.pivotOf(item) or nil
             if position then
                 local dist = (position - root.Position).Magnitude
                 if dist <= S.Farm.ItemRadius and (not bestDist or dist < bestDist) then
@@ -4053,7 +4084,12 @@ do
             Rob.fireNearby(12)
             task.wait(0.15)
         end
-        if not item.Parent then Farm.Collected = Farm.Collected + 1 end
+
+        if item.Parent then
+            parked[item] = os.clock() + 60
+        else
+            Farm.Collected = Farm.Collected + 1
+        end
     end)
 
     -- ---------------------------------------------------------- interaction

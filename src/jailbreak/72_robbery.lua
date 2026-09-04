@@ -105,8 +105,12 @@ do
     end
 
     -- -------------------------------------------------------------- deposit
+    -- Three failures in a row means the drop-off is not where this thinks it
+    -- is, and retrying forever would stop any more robbing from happening.
+    local bankFails = 0
+
     function Rob.deposit()
-        if not Game.carrying() then return true end
+        if not Game.carrying() then bankFails = 0 return true end
         local base = Game.nearestBase()
         if not base then return false end
 
@@ -118,7 +122,19 @@ do
             Rob.fireNearby(S.Rob.InteractRange)
             task.wait(0.25)
         end
-        return not Game.carrying()
+
+        if not Game.carrying() then
+            bankFails = 0
+            return true
+        end
+        bankFails = bankFails + 1
+        if bankFails >= 3 and S.Rob.Deposit then
+            bankFails = 0
+            S.Rob.Deposit = false
+            UI.refreshAll()
+            say("Could not bank the bag — turning that off.", "warn")
+        end
+        return false
     end
 
     -- ------------------------------------------------------------- one job
@@ -145,7 +161,9 @@ do
 
             -- One pass of prompts on arrival opens whatever needs opening,
             -- then alternate sweeping the loot with firing what is in reach.
+            local worked = false
             while working(entry, deadline) and not Game.bagFull() do
+                worked = true
                 if S.Rob.AutoInteract then Rob.fireNearby(S.Rob.InteractRange) end
                 if S.Rob.Loot then
                     lootSweep(entry, deadline)
@@ -155,9 +173,13 @@ do
                 task.wait(0.2)
             end
 
-            Rob.Runs = Rob.Runs + 1
             if S.Rob.Deposit then Rob.deposit() end
-            say(("Finished %s."):format(entry.name), "good")
+            if worked then
+                Rob.Runs = Rob.Runs + 1
+                say(("Finished %s."):format(entry.name), "good")
+            else
+                say(("%s closed before we got there."):format(entry.name), "warn")
+            end
         end)
 
         Rob.Busy, Rob.Current = false, nil

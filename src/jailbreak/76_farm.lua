@@ -24,14 +24,20 @@ do
         return workspace:FindFirstChild("Items")
     end
 
+    -- Anything we flew to and failed to collect is parked for a while. Without
+    -- this, one pickup we are not allowed to take is always the nearest one and
+    -- the farm never looks at anything else again.
+    local parked = setmetatable({}, {__mode = "k"})
+
     function Farm.nearestItem()
         local folder = itemsFolder()
         local root = U.myRoot()
         if not folder or not root then return nil end
 
+        local now = os.clock()
         local best, bestDist
         for _, item in ipairs(folder:GetChildren()) do
-            local position = Game.pivotOf(item)
+            local position = (parked[item] or 0) < now and Game.pivotOf(item) or nil
             if position then
                 local dist = (position - root.Position).Magnitude
                 if dist <= S.Farm.ItemRadius and (not bestDist or dist < bestDist) then
@@ -59,7 +65,12 @@ do
             Rob.fireNearby(12)
             task.wait(0.15)
         end
-        if not item.Parent then Farm.Collected = Farm.Collected + 1 end
+
+        if item.Parent then
+            parked[item] = os.clock() + 60
+        else
+            Farm.Collected = Farm.Collected + 1
+        end
     end)
 
     -- ---------------------------------------------------------- interaction
