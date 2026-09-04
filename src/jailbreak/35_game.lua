@@ -480,6 +480,57 @@ do
         return name ~= nil and name:lower():find("cuff") ~= nil
     end
 
+    -- --------------------------------------------------------------- bank
+    -- The bank is the one robbery whose way in genuinely is a fixed path, and
+    -- the server picks one of several interiors. These waypoints come from an
+    -- open-source Jailbreak script rather than guesswork, so they are as good
+    -- as that script's last update and no better.
+    local BANK_PATHS = {
+        TheMint = {
+            Vector3.new(52, 20, 857), Vector3.new(94, 3, 858),
+            Vector3.new(96, 3, 795), Vector3.new(65, 2, 762),
+        },
+        Corridor = {
+            Vector3.new(50, 20, 857), Vector3.new(50, -7, 857), Vector3.new(52, -7, 861),
+        },
+        Presidential = {
+            Vector3.new(48, 20, 857), Vector3.new(47, -6, 857), Vector3.new(72, -6, 858),
+            Vector3.new(79, -6, 933), Vector3.new(47, -6, 933),
+        },
+        Remastered = {
+            Vector3.new(51, 20, 857), Vector3.new(93, 3, 858), Vector3.new(95, 3, 818),
+        },
+        Basement = {
+            Vector3.new(44, 20, 856), Vector3.new(75, 11, 858), Vector3.new(75, 1, 884),
+            Vector3.new(75, 1, 905), Vector3.new(43, -7, 885),
+        },
+        Underwater = {
+            Vector3.new(51, 19, 856), Vector3.new(93, 3, 858), Vector3.new(96, -12, 801),
+        },
+        Deductions = {
+            Vector3.new(52, 20, 857), Vector3.new(93, 3, 858),
+            Vector3.new(89, 3, 918), Vector3.new(37, 2, 888),
+        },
+        TheBlueRoom = {
+            Vector3.new(48, 21, 856), Vector3.new(48, 2, 856),
+        },
+    }
+
+    Game.BankApproach = {Vector3.new(12, 19, 790), Vector3.new(25, 19, 854)}
+
+    function Game.bankPlan()
+        local bank = fromWorkspace("Banks")
+        local holder = bank and bank:FindFirstChild("Layout")
+        local layout = holder and holder:GetChildren()[1]
+        if not layout then return nil end
+        return {
+            name  = layout.Name,
+            path  = BANK_PATHS[layout.Name],
+            money = layout:FindFirstChild("Money"),
+            door  = layout:FindFirstChild("TriggerDoor"),
+        }
+    end
+
     -- -------------------------------------------------------------- places
     -- Somewhere to run a full bag to. Criminal bases only; the closest wins.
     Game.Bases = {
@@ -533,13 +584,17 @@ do
     end
 
     -- --------------------------------------------------------------- loot
-    -- Names Jailbreak gives to the things you stand on or grab to fill a bag.
+    -- Deliberately short. "safe" also matches Safety railings, "crate" matches
+    -- every decorative box on the map and "gold" matches gold trim, and with a
+    -- wide radius that is a few hundred pieces of scenery to go and stand on.
     local LOOT_WORDS = {
-        "money", "cash", "gold", "gem", "jewel", "loot", "uranium", "crate",
-        "briefcase", "duffel", "safe", "register", "diamond", "artifact",
+        "money", "cash", "gem", "jewel", "loot", "uranium",
+        "briefcase", "duffel", "diamond", "bullion",
     }
 
     local function looksLikeLoot(part)
+        -- Loot is small and pickable. A wall is not loot however it is named.
+        if part.Size.Magnitude > 40 then return false end
         local name = part.Name:lower()
         for _, word in ipairs(LOOT_WORDS) do
             if name:find(word, 1, true) then return true end
@@ -547,29 +602,48 @@ do
         return false
     end
 
-    -- Everything loot-shaped within `radius` of a point, nearest first. Used by
-    -- the rob routine to hop across a vault rather than hardcode its layout.
-    function Game.lootNear(centre, radius)
-        if typeof(centre) ~= "Vector3" then return {} end
+    -- What is worth standing on inside one robbery, nearest to its centre
+    -- first. Searching the robbery's own model rather than a sphere of world is
+    -- the difference between a vault's money piles and every crate in the city.
+    function Game.lootNear(entry, radius)
         local found = {}
-        -- Capped: a radius this big over Jailbreak's map can otherwise return
-        -- tens of thousands of parts and stall the thread that asked.
-        local params = OverlapParams.new()
-        params.MaxParts = 2000
-        local ok, parts = pcall(function()
-            return workspace:GetPartBoundsInRadius(centre, radius, params)
-        end)
-        if not ok or typeof(parts) ~= "table" then return found end
+        local centre = Game.centrePoint(entry)
+        if typeof(centre) ~= "Vector3" then return found end
+
+        local model
+        if entry.locate then
+            local ok, inst = pcall(entry.locate)
+            if ok and inst and not inst:IsA("BasePart") then model = inst end
+        end
+
+        local candidates
+        if model then
+            candidates = model:GetDescendants()
+        else
+            -- No model to search, so a sphere it is — kept tight, because this
+            -- is the case that used to send it across the map.
+            local params = OverlapParams.new()
+            params.MaxParts = 2000
+            local ok, parts = pcall(function()
+                return workspace:GetPartBoundsInRadius(centre, math.min(radius, 120), params)
+            end)
+            candidates = (ok and typeof(parts) == "table") and parts or {}
+        end
+
         local mine = LocalPlayer.Character
-        for _, part in ipairs(parts) do
+        for _, part in ipairs(candidates) do
             if part:IsA("BasePart") and looksLikeLoot(part)
                 and not (mine and part:IsDescendantOf(mine)) then
                 found[#found + 1] = part
             end
         end
+
         table.sort(found, function(a, b)
             return (a.Position - centre).Magnitude < (b.Position - centre).Magnitude
         end)
+        -- A robbery has a handful of things worth standing on. Past that it is
+        -- scenery with a suggestive name, and chasing it is what wandered.
+        while #found > 10 do table.remove(found) end
         return found
     end
 end

@@ -130,10 +130,9 @@ do
     -- Stand on each loot part in turn. Money in Jailbreak accrues while you
     -- are on it, so the dwell matters more than the number of stops.
     local function lootSweep(entry, deadline)
-        local centre = Game.centrePoint(entry)
-        if not centre then return end
+        if not Game.centrePoint(entry) then return end
 
-        local parts = Game.lootNear(centre, S.Rob.LootRadius)
+        local parts = Game.lootNear(entry, S.Rob.LootRadius)
         for _, part in ipairs(parts) do
             if not working(entry, deadline) or Game.bagFull() then return end
             if part.Parent then
@@ -181,6 +180,39 @@ do
         return false
     end
 
+    -- Touching a part the way the game's own detection would see it.
+    function Rob.touch(part)
+        local root = U.myRoot()
+        if not root or typeof(part) ~= "Instance" or not KH.X.firetouch then return end
+        pcall(firetouchinterest, root, part, 0)
+        pcall(firetouchinterest, root, part, 1)
+    end
+
+    -- The bank has a real interior with a door and a known way through it, so
+    -- it gets walked properly instead of being left to the loot heuristic.
+    local function enterBank(entry, deadline)
+        local plan = Game.bankPlan()
+        if not plan then return end
+
+        Rob.Status = "Entering the bank"
+        for _, point in ipairs(Game.BankApproach) do
+            if not working(entry, deadline) then return end
+            Travel.to(point, {direct = true, speed = 130, timeout = 8})
+        end
+
+        if plan.door then Rob.touch(plan.door) end
+        Rob.fireNearby(S.Rob.InteractRange)
+
+        for _, point in ipairs(plan.path or {}) do
+            if not working(entry, deadline) then return end
+            Travel.to(point, {direct = true, speed = 130, timeout = 8})
+        end
+
+        if plan.money and plan.money.Parent then
+            Travel.to(plan.money.Position, {direct = true, speed = 130, timeout = 8})
+        end
+    end
+
     -- ------------------------------------------------------------- one job
     function Rob.runOne(entry)
         if Rob.Busy then return false end
@@ -208,6 +240,7 @@ do
             Rob.Status = "Robbing " .. entry.name
             muteHazards(Game.centrePoint(entry))
             local deadline = os.clock() + math.max(S.Rob.Dwell, 10)
+            if entry.key == "BANK" then enterBank(entry, deadline) end
 
             -- One pass of prompts on arrival opens whatever needs opening,
             -- then alternate sweeping the loot with firing what is in reach.
