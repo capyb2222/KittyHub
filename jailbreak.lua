@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+a8186574  ·  2026-09-04 01:35 UTC
+--   build 3.1.0+edea93b2  ·  2026-09-04 01:39 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -195,6 +195,8 @@ do
             Loot          = true,            -- hop between loot parts inside
             LootRadius    = 220,             -- how far from the entry to look
             Dwell         = 70,              -- seconds before giving up on one job
+            Noclip        = true,            -- hold noclip for the whole job
+            Lasers        = true,            -- switch off laser hazards on arrival
             Deposit       = true,            -- run the bag to a base when it is full
             Restock       = true,            -- wait for the next robbery to open
             Wait          = 3,               -- seconds between jobs
@@ -3552,26 +3554,51 @@ do
         table.clear(held)
     end
 
+    -- Noclip is refcounted and separate from the flight, so a rob routine can
+    -- hold it for a whole job. Vault doors and laser housings are solid, and a
+    -- character that has to squeeze past them never gets in.
+    local clipDepth = 0
+
+    function Travel.noclip(on)
+        if on then
+            clipDepth = clipDepth + 1
+            if clipDepth == 1 then holdCollisions() end
+        else
+            clipDepth = math.max(clipDepth - 1, 0)
+            if clipDepth == 0 then releaseCollisions() end
+        end
+    end
+
+    -- Re-applied every frame while the lease is held: a respawn brings back a
+    -- whole new set of solid limbs, and holding it once would not cover them.
+    KH.onFrame("jb-noclip", function()
+        if clipDepth <= 0 then return end
+        local char = U.charOf(LocalPlayer)
+        if not char then return end
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                held[part] = true
+                part.CanCollide = false
+            end
+        end
+    end, 45)
+
     local function beginFlight()
         depth = depth + 1
-        if depth == 1 then
-            workspace.Gravity = 0
-            holdCollisions()
-        end
+        if depth == 1 then workspace.Gravity = 0 end
+        Travel.noclip(true)
     end
 
     local function endFlight()
         depth = math.max(depth - 1, 0)
-        if depth == 0 then
-            workspace.Gravity = BASE_GRAVITY
-            releaseCollisions()
-        end
+        if depth == 0 then workspace.Gravity = BASE_GRAVITY end
+        Travel.noclip(false)
     end
 
     -- Gravity is world state; leaving it at zero would break the game for the
     -- rest of the session, so unload puts it back whatever else happened.
     KH.undo(function()
-        depth = 0
+        depth, clipDepth = 0, 0
         workspace.Gravity = BASE_GRAVITY
         releaseCollisions()
     end)
@@ -3631,6 +3658,31 @@ do
             and leg(landing, speed, 2.5, deadline)
     end
 
+    -- Never hand the character back in mid-air. Restoring gravity three hundred
+    -- studs up is not a failed teleport, it is a death, and a flight that timed
+    -- out is exactly when that happens.
+    local function settle()
+        local root = U.myRoot()
+        if not root then return end
+
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {LocalPlayer.Character}
+        local hit = workspace:Raycast(root.Position, Vector3.new(0, -2000, 0), params)
+        if not hit then return end
+
+        local drop = root.Position.Y - hit.Position.Y
+        if drop <= 10 then return end
+
+        -- Landing has to happen even when the flight was cancelled, or Stop
+        -- would be the most reliable way to kill yourself.
+        local cancelled = cancel
+        cancel = false
+        leg(Vector3.new(root.Position.X, hit.Position.Y + 4, root.Position.Z),
+            math.max(drop, 120), 3, os.clock() + 10)
+        cancel = cancelled
+    end
+
     -- destination may be a Vector3 or a CFrame. opts: mode, speed, height,
     -- timeout, direct.
     function Travel.to(destination, opts)
@@ -3652,6 +3704,7 @@ do
             beginFlight()
             -- pcall so a mid-flight error can never leave gravity at zero.
             local safe, result = pcall(fly, target, opts)
+            pcall(settle)
             endFlight()
             ok = safe and result or false
         end
@@ -3756,6 +3809,50 @@ do
         return Game.isRobbable(entry)
     end
 
+    -- ------------------------------------------------------------- hazards
+    -- Bank and museum lasers kill on contact, and the contact is detected on
+    -- our side, so a laser that cannot be touched cannot hurt us. Switched
+    -- rather than destroyed, because the job ends and the game carries on.
+    local muted = {}
+
+    local function looksHazardous(part)
+        local node, hops = part, 0
+        while node and hops < 4 do
+            local name = node.Name:lower()
+            if name:find("laser") or name:find("lazer") or name:find("beam") then
+                return true
+            end
+            node, hops = node.Parent, hops + 1
+        end
+        return false
+    end
+
+    local function unmute()
+        for part, was in pairs(muted) do
+            if part.Parent then pcall(function() part.CanTouch = was end) end
+        end
+        table.clear(muted)
+    end
+    KH.undo(unmute)
+
+    local function muteHazards(centre)
+        if not S.Rob.Lasers or typeof(centre) ~= "Vector3" then return end
+
+        local params = OverlapParams.new()
+        params.MaxParts = 2000
+        local ok, parts = pcall(function()
+            return workspace:GetPartBoundsInRadius(centre, S.Rob.LootRadius, params)
+        end)
+        if not ok or typeof(parts) ~= "table" then return end
+
+        for _, part in ipairs(parts) do
+            if part:IsA("BasePart") and muted[part] == nil and looksHazardous(part) then
+                muted[part] = part.CanTouch
+                pcall(function() part.CanTouch = false end)
+            end
+        end
+    end
+
     -- ----------------------------------------------------------------- loot
     -- Stand on each loot part in turn. Money in Jailbreak accrues while you
     -- are on it, so the dwell matters more than the number of stops.
@@ -3817,6 +3914,10 @@ do
         if not entry then return false end
 
         Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
+        -- Held for the whole job, not per hop: vault doors and laser housings
+        -- are solid, and getting in is most of what a robbery is.
+        if S.Rob.Noclip then Travel.noclip(true) end
+
         local ok = pcall(function()
             local point = Game.entryPoint(entry)
             if not point then
@@ -3831,6 +3932,7 @@ do
             end
 
             Rob.Status = "Robbing " .. entry.name
+            muteHazards(Game.centrePoint(entry))
             local deadline = os.clock() + math.max(S.Rob.Dwell, 10)
 
             -- One pass of prompts on arrival opens whatever needs opening,
@@ -3855,6 +3957,9 @@ do
                 say(("%s closed before we got there."):format(entry.name), "warn")
             end
         end)
+
+        if S.Rob.Noclip then Travel.noclip(false) end
+        unmute()
 
         Rob.Busy, Rob.Current = false, nil
         Rob.Status = "Idle"
@@ -4635,6 +4740,16 @@ do
             desc = "Abandon the current job and stay where you are.",
             callback = function() Rob.stop() end,
         })
+
+        local safety = UI.section(tab, "Staying Alive")
+        UI.toggle(safety, opt("Rob", "Noclip", {
+            text = "Noclip Through The Job",
+            desc = "Held for the whole robbery, not just the flight. Vault doors and laser housings are solid and there is usually no way past them.",
+        }))
+        UI.toggle(safety, opt("Rob", "Lasers", {
+            text = "Disable Lasers",
+            desc = "Stops laser parts at the robbery registering a touch. Not god mode — it only covers the hazard that does the killing.",
+        }))
 
         local how = UI.section(tab, "How It Works")
         UI.toggle(how, opt("Rob", "Instant", {

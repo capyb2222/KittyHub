@@ -39,26 +39,51 @@ do
         table.clear(held)
     end
 
+    -- Noclip is refcounted and separate from the flight, so a rob routine can
+    -- hold it for a whole job. Vault doors and laser housings are solid, and a
+    -- character that has to squeeze past them never gets in.
+    local clipDepth = 0
+
+    function Travel.noclip(on)
+        if on then
+            clipDepth = clipDepth + 1
+            if clipDepth == 1 then holdCollisions() end
+        else
+            clipDepth = math.max(clipDepth - 1, 0)
+            if clipDepth == 0 then releaseCollisions() end
+        end
+    end
+
+    -- Re-applied every frame while the lease is held: a respawn brings back a
+    -- whole new set of solid limbs, and holding it once would not cover them.
+    KH.onFrame("jb-noclip", function()
+        if clipDepth <= 0 then return end
+        local char = U.charOf(LocalPlayer)
+        if not char then return end
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                held[part] = true
+                part.CanCollide = false
+            end
+        end
+    end, 45)
+
     local function beginFlight()
         depth = depth + 1
-        if depth == 1 then
-            workspace.Gravity = 0
-            holdCollisions()
-        end
+        if depth == 1 then workspace.Gravity = 0 end
+        Travel.noclip(true)
     end
 
     local function endFlight()
         depth = math.max(depth - 1, 0)
-        if depth == 0 then
-            workspace.Gravity = BASE_GRAVITY
-            releaseCollisions()
-        end
+        if depth == 0 then workspace.Gravity = BASE_GRAVITY end
+        Travel.noclip(false)
     end
 
     -- Gravity is world state; leaving it at zero would break the game for the
     -- rest of the session, so unload puts it back whatever else happened.
     KH.undo(function()
-        depth = 0
+        depth, clipDepth = 0, 0
         workspace.Gravity = BASE_GRAVITY
         releaseCollisions()
     end)
@@ -118,6 +143,31 @@ do
             and leg(landing, speed, 2.5, deadline)
     end
 
+    -- Never hand the character back in mid-air. Restoring gravity three hundred
+    -- studs up is not a failed teleport, it is a death, and a flight that timed
+    -- out is exactly when that happens.
+    local function settle()
+        local root = U.myRoot()
+        if not root then return end
+
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {LocalPlayer.Character}
+        local hit = workspace:Raycast(root.Position, Vector3.new(0, -2000, 0), params)
+        if not hit then return end
+
+        local drop = root.Position.Y - hit.Position.Y
+        if drop <= 10 then return end
+
+        -- Landing has to happen even when the flight was cancelled, or Stop
+        -- would be the most reliable way to kill yourself.
+        local cancelled = cancel
+        cancel = false
+        leg(Vector3.new(root.Position.X, hit.Position.Y + 4, root.Position.Z),
+            math.max(drop, 120), 3, os.clock() + 10)
+        cancel = cancelled
+    end
+
     -- destination may be a Vector3 or a CFrame. opts: mode, speed, height,
     -- timeout, direct.
     function Travel.to(destination, opts)
@@ -139,6 +189,7 @@ do
             beginFlight()
             -- pcall so a mid-flight error can never leave gravity at zero.
             local safe, result = pcall(fly, target, opts)
+            pcall(settle)
             endFlight()
             ok = safe and result or false
         end

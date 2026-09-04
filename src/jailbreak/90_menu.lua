@@ -124,6 +124,16 @@ do
             callback = function() Rob.stop() end,
         })
 
+        local safety = UI.section(tab, "Staying Alive")
+        UI.toggle(safety, opt("Rob", "Noclip", {
+            text = "Noclip Through The Job",
+            desc = "Held for the whole robbery, not just the flight. Vault doors and laser housings are solid and there is usually no way past them.",
+        }))
+        UI.toggle(safety, opt("Rob", "Lasers", {
+            text = "Disable Lasers",
+            desc = "Stops laser parts at the robbery registering a touch. Not god mode — it only covers the hazard that does the killing.",
+        }))
+
         local how = UI.section(tab, "How It Works")
         UI.toggle(how, opt("Rob", "Instant", {
             text = "Instant Interactions",

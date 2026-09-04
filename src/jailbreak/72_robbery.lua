@@ -82,6 +82,50 @@ do
         return Game.isRobbable(entry)
     end
 
+    -- ------------------------------------------------------------- hazards
+    -- Bank and museum lasers kill on contact, and the contact is detected on
+    -- our side, so a laser that cannot be touched cannot hurt us. Switched
+    -- rather than destroyed, because the job ends and the game carries on.
+    local muted = {}
+
+    local function looksHazardous(part)
+        local node, hops = part, 0
+        while node and hops < 4 do
+            local name = node.Name:lower()
+            if name:find("laser") or name:find("lazer") or name:find("beam") then
+                return true
+            end
+            node, hops = node.Parent, hops + 1
+        end
+        return false
+    end
+
+    local function unmute()
+        for part, was in pairs(muted) do
+            if part.Parent then pcall(function() part.CanTouch = was end) end
+        end
+        table.clear(muted)
+    end
+    KH.undo(unmute)
+
+    local function muteHazards(centre)
+        if not S.Rob.Lasers or typeof(centre) ~= "Vector3" then return end
+
+        local params = OverlapParams.new()
+        params.MaxParts = 2000
+        local ok, parts = pcall(function()
+            return workspace:GetPartBoundsInRadius(centre, S.Rob.LootRadius, params)
+        end)
+        if not ok or typeof(parts) ~= "table" then return end
+
+        for _, part in ipairs(parts) do
+            if part:IsA("BasePart") and muted[part] == nil and looksHazardous(part) then
+                muted[part] = part.CanTouch
+                pcall(function() part.CanTouch = false end)
+            end
+        end
+    end
+
     -- ----------------------------------------------------------------- loot
     -- Stand on each loot part in turn. Money in Jailbreak accrues while you
     -- are on it, so the dwell matters more than the number of stops.
@@ -143,6 +187,10 @@ do
         if not entry then return false end
 
         Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
+        -- Held for the whole job, not per hop: vault doors and laser housings
+        -- are solid, and getting in is most of what a robbery is.
+        if S.Rob.Noclip then Travel.noclip(true) end
+
         local ok = pcall(function()
             local point = Game.entryPoint(entry)
             if not point then
@@ -157,6 +205,7 @@ do
             end
 
             Rob.Status = "Robbing " .. entry.name
+            muteHazards(Game.centrePoint(entry))
             local deadline = os.clock() + math.max(S.Rob.Dwell, 10)
 
             -- One pass of prompts on arrival opens whatever needs opening,
@@ -181,6 +230,9 @@ do
                 say(("%s closed before we got there."):format(entry.name), "warn")
             end
         end)
+
+        if S.Rob.Noclip then Travel.noclip(false) end
+        unmute()
 
         Rob.Busy, Rob.Current = false, nil
         Rob.Status = "Idle"

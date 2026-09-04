@@ -19,6 +19,8 @@ do
             Loot          = true,            -- hop between loot parts inside
             LootRadius    = 220,             -- how far from the entry to look
             Dwell         = 70,              -- seconds before giving up on one job
+            Noclip        = true,            -- hold noclip for the whole job
+            Lasers        = true,            -- switch off laser hazards on arrival
             Deposit       = true,            -- run the bag to a base when it is full
             Restock       = true,            -- wait for the next robbery to open
             Wait          = 3,               -- seconds between jobs
