@@ -469,16 +469,19 @@ do
             end,
         },
         {
+            text = "Memory Scan",
+            get = function() return Game.CanScan and "available" or "unavailable" end,
+        },
+        {
             text = "Game Modules",
             get = function()
-                if not Game.Resolved then return "resolving…" end
                 local have = {}
                 for name, value in pairs(Game.M) do
                     if value ~= nil then have[#have + 1] = name end
                 end
-                if #have == 0 then return "none found" end
                 table.sort(have)
-                return table.concat(have, ", ")
+                if #have > 0 then return table.concat(have, ", ") end
+                return Game.Resolved and "none found" or "looking…"
             end,
         },
     }

@@ -96,17 +96,82 @@ do
         return found
     end
 
+    -- ---------------------------------------------------------- memory scan
+    -- When require is refused outright, the tables are still there: Jailbreak's
+    -- own client loaded them at startup, so they are live in memory and the
+    -- collector can hand them over. Each is recognised by its shape, because
+    -- nothing in a garbage dump carries the name it was required under.
+    local SHAPES = {
+        CircleAction = function(t)
+            return type(rawget(t, "Specs")) == "table"
+                and type(rawget(t, "Create")) == "function"
+                and type(rawget(t, "Remove")) == "function"
+        end,
+        ItemSystem = function(t)
+            return type(rawget(t, "GetLocalEquipped")) == "function"
+        end,
+        Consts = function(t)
+            return type(rawget(t, "ENUM_STATUS")) == "table"
+                and type(rawget(t, "LIST_ROBBERY")) == "table"
+        end,
+    }
+
+    local collect = pick(getgc, get_gc_objects, synTable and synTable.getgc)
+    Game.CanScan = collect ~= nil
+
+    local function scanMemory()
+        if not collect then return end
+
+        local wanted = {}
+        for name, test in pairs(SHAPES) do
+            if M[name] == nil then wanted[name] = test end
+        end
+        if next(wanted) == nil then return end
+
+        -- Some builds take the "include tables" flag, some already return them.
+        local ok, objects = pcall(collect, true)
+        if not ok or type(objects) ~= "table" then
+            ok, objects = pcall(collect)
+        end
+        if not ok or type(objects) ~= "table" then return end
+
+        for index, object in ipairs(objects) do
+            if type(object) == "table" then
+                for name, test in pairs(wanted) do
+                    local matched = false
+                    pcall(function() matched = test(object) end)
+                    if matched then
+                        M[name] = object
+                        wanted[name] = nil
+                    end
+                end
+                if next(wanted) == nil then return end
+            end
+            -- The dump runs to hundreds of thousands of objects; walking it in
+            -- one go would freeze the frame it started on.
+            if index % 4000 == 0 then task.wait() end
+        end
+    end
+
     -- Retried a few times: on a slow join ReplicatedStorage is still filling in.
     KH.spawn(function()
+        local function done()
+            return M.ItemSystem ~= nil and (M.CircleAction ~= nil or M.UI ~= nil)
+        end
+
         for attempt = 1, 12 do
-            local missing = false
-            for name in pairs(PATHS) do
-                if M[name] == nil then
-                    M[name] = resolve(name)
-                    if M[name] == nil then missing = true end
+            -- Only the first couple of rounds try require. When the executor's
+            -- identity forbids it, every further attempt is another red line in
+            -- the console and never going to start working.
+            if attempt <= 2 then
+                for name in pairs(PATHS) do
+                    if M[name] == nil then M[name] = resolve(name) end
                 end
             end
-            if not missing then break end
+            -- The scan is expensive, so it only runs while something is still
+            -- missing, and only for the first few rounds.
+            if not done() and attempt <= 3 then scanMemory() end
+            if done() then break end
             task.wait(attempt < 4 and 1 or 3)
         end
 
@@ -121,6 +186,7 @@ do
     end)
 
     function Game.circleAction()
+        if M.CircleAction then return M.CircleAction end
         local ui = M.UI
         return ui and ui.CircleAction or nil
     end
