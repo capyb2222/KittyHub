@@ -461,6 +461,14 @@ do
     KH.SessionInfo = {
         {text = "Team", get = function() return Game.myTeamName() or "none" end},
         {
+            text = "Thread Identity",
+            get = function()
+                local id = Game.identity()
+                if id == nil then return Game.CanSetIdentity and "settable" or "no control" end
+                return tostring(id) .. (Game.CanSetIdentity and "" or " (fixed)")
+            end,
+        },
+        {
             text = "Game Modules",
             get = function()
                 if not Game.Resolved then return "resolving…" end

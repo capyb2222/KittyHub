@@ -43,15 +43,57 @@ do
         return node
     end
 
+    -- select, not ipairs over {...}: a nil in the list would end the walk and
+    -- hide every candidate after it.
+    local function pick(...)
+        for i = 1, select("#", ...) do
+            local candidate = select(i, ...)
+            if type(candidate) == "function" then return candidate end
+        end
+        return nil
+    end
+
+    -- Executors run at RobloxScript identity, and Roblox refuses `require` of a
+    -- normal game module from there — "Cannot require a non-RobloxScript module
+    -- from a RobloxScript". Dropping to a game-script identity for the call is
+    -- what makes any of this reachable at all; it is put back afterwards.
+    local synTable = type(syn) == "table" and syn or nil
+    local setIdentity = pick(setthreadidentity, setidentity, set_thread_identity,
+        synTable and synTable.set_thread_identity)
+    local getIdentity = pick(getthreadidentity, getidentity, get_thread_identity,
+        synTable and synTable.get_thread_identity)
+
+    Game.CanSetIdentity = setIdentity ~= nil
+
+    function Game.identity()
+        if not getIdentity then return nil end
+        local ok, value = pcall(getIdentity)
+        return ok and value or nil
+    end
+
+    local function tryRequire(script, identity)
+        if identity then
+            if not setIdentity then return nil end
+            if not pcall(setIdentity, identity) then return nil end
+        end
+        local ok, value = pcall(require, script)
+        return ok and value or nil
+    end
+
     local function resolve(name)
+        local previous = Game.identity()
+        local found
         for _, path in ipairs(PATHS[name]) do
             local script = descend(ReplicatedStorage, path)
             if script and script:IsA("ModuleScript") then
-                local ok, value = pcall(require, script)
-                if ok and value ~= nil then return value end
+                -- 2 is the game-script identity that may require game modules;
+                -- 8 is the other one executors commonly accept.
+                found = tryRequire(script) or tryRequire(script, 2) or tryRequire(script, 8)
+                if found ~= nil then break end
             end
         end
-        return nil
+        if setIdentity and previous then pcall(setIdentity, previous) end
+        return found
     end
 
     -- Retried a few times: on a slow join ReplicatedStorage is still filling in.
@@ -337,17 +379,27 @@ do
     end
 
     -- --------------------------------------------------------------- items
-    function Game.equippedName()
+    -- Whether we can read what is in hand at all. Nothing equipped and no item
+    -- system both read as nil, and the difference decides whether "no
+    -- handcuffs" is a fact or just something we cannot see.
+    function Game.itemSystemReady()
         local system = M.ItemSystem
-        if not system or type(system.GetLocalEquipped) ~= "function" then return nil end
-        local ok, item = pcall(system.GetLocalEquipped, system)
+        return system ~= nil and type(system.GetLocalEquipped) == "function"
+    end
+
+    function Game.equippedName()
+        if not Game.itemSystemReady() then return nil end
+        local ok, item = pcall(M.ItemSystem.GetLocalEquipped, M.ItemSystem)
         if not ok or typeof(item) ~= "table" then return nil end
         local named, class = pcall(function() return item.__ClassName end)
         return (named and typeof(class) == "string") and class or nil
     end
 
+    -- Substring, because the exact class name is not worth betting the whole
+    -- feature on — Handcuffs, HandCuffs and Cuffs all read the same way.
     function Game.holdingHandcuffs()
-        return Game.equippedName() == "Handcuffs"
+        local name = Game.equippedName()
+        return name ~= nil and name:lower():find("cuff") ~= nil
     end
 
     -- -------------------------------------------------------------- places

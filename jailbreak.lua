@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+1230a5b6  ·  2026-09-04 01:19 UTC
+--   build 3.1.0+582c3b11  ·  2026-09-04 01:28 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -663,15 +663,57 @@ do
         return node
     end
 
+    -- select, not ipairs over {...}: a nil in the list would end the walk and
+    -- hide every candidate after it.
+    local function pick(...)
+        for i = 1, select("#", ...) do
+            local candidate = select(i, ...)
+            if type(candidate) == "function" then return candidate end
+        end
+        return nil
+    end
+
+    -- Executors run at RobloxScript identity, and Roblox refuses `require` of a
+    -- normal game module from there — "Cannot require a non-RobloxScript module
+    -- from a RobloxScript". Dropping to a game-script identity for the call is
+    -- what makes any of this reachable at all; it is put back afterwards.
+    local synTable = type(syn) == "table" and syn or nil
+    local setIdentity = pick(setthreadidentity, setidentity, set_thread_identity,
+        synTable and synTable.set_thread_identity)
+    local getIdentity = pick(getthreadidentity, getidentity, get_thread_identity,
+        synTable and synTable.get_thread_identity)
+
+    Game.CanSetIdentity = setIdentity ~= nil
+
+    function Game.identity()
+        if not getIdentity then return nil end
+        local ok, value = pcall(getIdentity)
+        return ok and value or nil
+    end
+
+    local function tryRequire(script, identity)
+        if identity then
+            if not setIdentity then return nil end
+            if not pcall(setIdentity, identity) then return nil end
+        end
+        local ok, value = pcall(require, script)
+        return ok and value or nil
+    end
+
     local function resolve(name)
+        local previous = Game.identity()
+        local found
         for _, path in ipairs(PATHS[name]) do
             local script = descend(ReplicatedStorage, path)
             if script and script:IsA("ModuleScript") then
-                local ok, value = pcall(require, script)
-                if ok and value ~= nil then return value end
+                -- 2 is the game-script identity that may require game modules;
+                -- 8 is the other one executors commonly accept.
+                found = tryRequire(script) or tryRequire(script, 2) or tryRequire(script, 8)
+                if found ~= nil then break end
             end
         end
-        return nil
+        if setIdentity and previous then pcall(setIdentity, previous) end
+        return found
     end
 
     -- Retried a few times: on a slow join ReplicatedStorage is still filling in.
@@ -957,17 +999,27 @@ do
     end
 
     -- --------------------------------------------------------------- items
-    function Game.equippedName()
+    -- Whether we can read what is in hand at all. Nothing equipped and no item
+    -- system both read as nil, and the difference decides whether "no
+    -- handcuffs" is a fact or just something we cannot see.
+    function Game.itemSystemReady()
         local system = M.ItemSystem
-        if not system or type(system.GetLocalEquipped) ~= "function" then return nil end
-        local ok, item = pcall(system.GetLocalEquipped, system)
+        return system ~= nil and type(system.GetLocalEquipped) == "function"
+    end
+
+    function Game.equippedName()
+        if not Game.itemSystemReady() then return nil end
+        local ok, item = pcall(M.ItemSystem.GetLocalEquipped, M.ItemSystem)
         if not ok or typeof(item) ~= "table" then return nil end
         local named, class = pcall(function() return item.__ClassName end)
         return (named and typeof(class) == "string") and class or nil
     end
 
+    -- Substring, because the exact class name is not worth betting the whole
+    -- feature on — Handcuffs, HandCuffs and Cuffs all read the same way.
     function Game.holdingHandcuffs()
-        return Game.equippedName() == "Handcuffs"
+        local name = Game.equippedName()
+        return name ~= nil and name:lower():find("cuff") ~= nil
     end
 
     -- -------------------------------------------------------------- places
@@ -3852,9 +3904,8 @@ do
     -- is not there on every executor. Without it, pressing the hotbar key is
     -- still the right move — we just cannot confirm it landed.
     function Police.equipped()
-        local name = Game.equippedName()
-        if name == nil then return "unknown" end
-        return name
+        if not Game.itemSystemReady() then return "unknown" end
+        return Game.equippedName() or "nothing"
     end
 
     local SLOT_KEYS = {
@@ -3881,20 +3932,37 @@ do
         end))
     end
 
-    -- Without the item system there is no way to tell the press worked, so it
-    -- is rate limited — otherwise the aura would hammer the hotbar key forever.
+    -- Rate limited: without the item system there is no way to tell a press
+    -- worked, and the aura would otherwise hammer the hotbar key forever.
     local lastEquip = 0
 
     function Police.equipCuffs()
         if Game.holdingHandcuffs() then return true end
-        if not S.Police.AutoEquip then return Police.equipped() == "unknown" end
+        if not S.Police.AutoEquip then return false end
         if os.clock() - lastEquip < 2 then return false end
-
         lastEquip = os.clock()
-        pressSlot(math.clamp(math.floor(S.Police.CuffSlot), 1, 9))
+
+        local slot = math.clamp(math.floor(S.Police.CuffSlot), 1, 9)
+        pressSlot(slot)
         task.wait(0.15)
-        -- "unknown" means the item system is unavailable, not that it failed.
-        return Game.holdingHandcuffs() or Police.equipped() == "unknown"
+        if Game.holdingHandcuffs() then return true end
+
+        -- No way to check the result, so the configured slot is all we have.
+        if not Game.itemSystemReady() then return true end
+
+        -- We can see what landed, so walk the rest of the bar rather than
+        -- trusting a slot number, and remember the one that worked.
+        for other = 1, 9 do
+            if other ~= slot then
+                pressSlot(other)
+                task.wait(0.12)
+                if Game.holdingHandcuffs() then
+                    S.Police.CuffSlot = other
+                    return true
+                end
+            end
+        end
+        return false
     end
 
     -- ---------------------------------------------------------------- touch
@@ -3958,31 +4026,56 @@ do
         pcall(function()
             Police.equipCuffs()
 
+            -- When the item system is up this is knowable, and "you were not
+            -- holding handcuffs" is worth saying instead of fifteen misses.
+            if S.Police.AutoEquip and Game.itemSystemReady() and not Game.holdingHandcuffs() then
+                Police.LastResult = "no handcuffs — holding " .. Police.equipped()
+                UI.notify({
+                    title = "Arrest All",
+                    text = "Not holding handcuffs (" .. Police.equipped()
+                        .. "), so nothing would stick. Turn Equip Handcuffs off to sweep anyway.",
+                    kind = "bad",
+                    duration = 9,
+                })
+                return
+            end
+
             local targets = Game.criminals()
             if #targets == 0 then
                 Police.LastResult = "no criminals in the server"
-                Police.Status = "Idle"
                 UI.notify({title = "Arrest All", text = "Nobody to arrest.", kind = "warn"})
                 return
             end
 
-            local got, missed = 0, 0
+            local got, gone, driving, stuck = 0, 0, 0, 0
             for index, player in ipairs(targets) do
                 if not KH.Alive or Police.Abort then break end
                 Police.Status = ("Arresting %d/%d"):format(index, #targets)
 
-                if S.Police.SkipVehicles and Game.inVehicle(player) then
-                    missed = missed + 1
+                if not U.rootOf(player) then
+                    gone = gone + 1
+                elseif S.Police.SkipVehicles and Game.inVehicle(player) then
+                    driving = driving + 1
                 elseif Police.arrest(player) then
                     got = got + 1
                     Police.Arrests = Police.Arrests + 1
                 else
-                    missed = missed + 1
+                    stuck = stuck + 1
                 end
                 task.wait(math.max(S.Police.Spacing, 0))
             end
 
-            Police.LastResult = ("%d arrested, %d missed"):format(got, missed)
+            -- Naming the failure is the whole point: "missed" on its own never
+            -- said whether it was the cuffs, the range, or the game refusing.
+            local why = {}
+            if stuck > 0 then why[#why + 1] = ("%d did not stick"):format(stuck) end
+            if driving > 0 then why[#why + 1] = ("%d in vehicles"):format(driving) end
+            if gone > 0 then why[#why + 1] = ("%d had no character"):format(gone) end
+
+            Police.LastResult = ("%d arrested"):format(got)
+            if #why > 0 then
+                Police.LastResult = Police.LastResult .. " — " .. table.concat(why, ", ")
+            end
             UI.notify({
                 title = "Arrest All",
                 text = Police.LastResult,
@@ -4813,6 +4906,14 @@ do
 
     KH.SessionInfo = {
         {text = "Team", get = function() return Game.myTeamName() or "none" end},
+        {
+            text = "Thread Identity",
+            get = function()
+                local id = Game.identity()
+                if id == nil then return Game.CanSetIdentity and "settable" or "no control" end
+                return tostring(id) .. (Game.CanSetIdentity and "" or " (fixed)")
+            end,
+        },
         {
             text = "Game Modules",
             get = function()
