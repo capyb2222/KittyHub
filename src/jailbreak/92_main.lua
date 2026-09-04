@@ -146,6 +146,15 @@ do
         duration = 5,
     })
 
+    if not Game.internalsReachable() then
+        UI.notify({
+            title = "Limited Here",
+            text = "Auto rob, travel and the arrest sweep are hidden. This executor's collector returns no Lua objects, so the game's modules are unreachable and movement gets reverted. See Settings for the verdict.",
+            kind = "warn",
+            duration = 12,
+        })
+    end
+
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
     print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all")
         :format(S.UI.MenuKey, S.Move.NoclipKey, S.Move.FlyKey, S.Police.ArrestKey))

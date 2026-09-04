@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+f5acc587  ·  2026-09-04 04:44 UTC
+--   build 3.1.0+6c5b6400  ·  2026-09-04 04:47 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -976,6 +976,31 @@ do
                     id, ok and "ok" or trim(err, 120)))
             end
         end
+    end
+
+    -- The same question as the verdict, but cheap and cached: the menu is
+    -- built a second after load and cannot wait on a walk of the whole heap.
+    local reachable = nil
+
+    function Game.internalsReachable()
+        if reachable ~= nil then return reachable end
+        reachable = false
+        if collect then
+            local ok, dump = pcall(collect, true)
+            if ok and type(dump) == "table" then
+                local seen = 0
+                for _, object in pairs(dump) do
+                    local kind = type(object)
+                    if kind == "function" or kind == "table" then
+                        reachable = true
+                        break
+                    end
+                    seen = seen + 1
+                    if seen >= 5000 then break end
+                end
+            end
+        end
+        return reachable
     end
 
     -- Plain English, so any executor can be judged in one load without
@@ -5102,6 +5127,20 @@ do
         return t
     end
 
+    -- Everything that reaches into Jailbreak's own modules, and everything
+    -- that moves the character, depends on the collector handing back real Lua
+    -- objects. Where it does not, the game's anti-cheat simply puts the
+    -- character back and the module tables are unreachable — so those controls
+    -- are taken out of the menu rather than left looking operable.
+    local usable = Game.internalsReachable()
+
+    local function hide(thing)
+        if usable or not thing then return thing end
+        local node = thing.card or thing.button or thing.row or thing
+        if typeof(node) == "Instance" then node.Visible = false end
+        return thing
+    end
+
     local function robberyNames()
         local names = {}
         for _, entry in ipairs(Game.Robberies) do
@@ -5247,7 +5286,15 @@ do
         }))
         UI.toggle(how, opt("Rob", "Notify", {text = "Announce Each Job"}))
 
+        hide(auto)
+        hide(manual)
+        hide(safety)
+        hide(how)
+
         local board = UI.section(tab, "Robbery States")
+        if not usable then
+            UI.label(board, "Auto Rob is hidden: this executor cannot reach Jailbreak's own modules, so prompts never fire and the anti-cheat puts the character straight back. Settings shows the verdict. The board below still works — it reads replicated values.")
+        end
         for _, entry in ipairs(Game.Robberies) do
             if not entry.skip then
                 UI.readout(board, {
@@ -5309,16 +5356,22 @@ do
             desc = "You cannot arrest a driver, so this saves the wasted stop.",
         }))
 
+        hide(arrest)
+        hide(tuning)
+
         local aura = UI.section(tab, "Arrest Aura")
+        if not usable then
+            UI.label(aura, "The sweep is hidden: it works by moving you onto each criminal, and that movement gets reverted here. The aura does not move you, so it is worth a try with handcuffs already in hand.")
+        end
         UI.label(aura, "Stays where you are and cuffs anyone who walks into range. Nothing teleports, so this is the version that does not look like anything.")
         UI.toggle(aura, opt("Police", "Aura", {text = "Arrest Aura"}))
         UI.slider(aura, opt("Police", "AuraRange", {
             text = "Aura Range", min = 5, max = 60, step = 1, suffix = " studs",
         }))
-        UI.toggle(aura, opt("Police", "AutoArrest", {
+        hide(UI.toggle(aura, opt("Police", "AutoArrest", {
             text = "Keep Sweeping",
             desc = "Re-run Arrest Everyone whenever new criminals appear.",
-        }))
+        })))
 
         local gear = UI.section(tab, "Handcuffs")
         UI.toggle(gear, opt("Police", "AutoEquip", {
@@ -5328,7 +5381,7 @@ do
         UI.slider(gear, opt("Police", "CuffSlot", {
             text = "Handcuff Hotbar Slot", min = 1, max = 9, step = 1,
         }))
-        UI.readout(gear, {text = "In Hand", get = function() return Police.equipped() end})
+        hide(UI.readout(gear, {text = "In Hand", get = function() return Police.equipped() end}))
     end
 
     -- ============================================================ FARM TAB
@@ -5353,6 +5406,9 @@ do
         UI.slider(aura, opt("Farm", "AuraRange", {
             text = "Aura Range", min = 5, max = 80, step = 1, suffix = " studs",
         }))
+
+        hide(pickups)
+        hide(aura)
 
         local session = UI.section(tab, "Session")
         UI.toggle(session, opt("Farm", "AntiAFK", {
@@ -5450,6 +5506,7 @@ do
             end,
         })
         refreshWaypoints()
+        hide(tab)
     end
 
     -- ============================================================= ESP TAB
@@ -5534,6 +5591,7 @@ do
             text = "Fly Speed", min = 20, max = 400, step = 5,
         }))
         UI.toggle(clip, opt("Move", "Spinbot", {text = "Spinbot"}))
+        hide(tab)
     end
 
     -- ========================================================= VISUALS TAB
@@ -5923,6 +5981,15 @@ do
         kind = "good",
         duration = 5,
     })
+
+    if not Game.internalsReachable() then
+        UI.notify({
+            title = "Limited Here",
+            text = "Auto rob, travel and the arrest sweep are hidden. This executor's collector returns no Lua objects, so the game's modules are unreachable and movement gets reverted. See Settings for the verdict.",
+            kind = "warn",
+            duration = 12,
+        })
+    end
 
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
     print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all")

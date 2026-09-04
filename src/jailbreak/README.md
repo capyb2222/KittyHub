@@ -17,10 +17,22 @@ PlaceId 606849621. Builds to `jailbreak.lua`.
 - **Visuals**
 - **Config profiles**
 
-Never tested in game, so expect some of it to be off.
+## Your executor decides how much of this you get
 
-Xeno often will not attach here. Join MM2 instead, run the loadstring, then
-Settings → Switch Game → Jailbreak. It queues itself over the teleport.
+Most of the list needs Jailbreak's own client modules, which means the executor
+has to hand back real Lua objects from `getgc`. Plenty of them don't — Xeno
+says it has the functions and returns nothing. Without them the game's
+anti-cheat also stays on, and anything that moves you gets reverted.
+
+**Settings → Executor Verdict** says which one you have. When it can't reach
+them, the tabs that cannot work are hidden rather than left there looking fine,
+and you keep the robbery board, ESP, anti-AFK and the arrest aura.
+
+Check sUNC, not UNC — UNC counts functions that exist, sUNC counts ones that
+work. Xeno is 40%. Anything near 100% is fine.
+
+Xeno often will not attach here either. Join MM2 instead, run the loadstring,
+then Settings → Switch Game → Jailbreak. It queues itself over the teleport.
 
 It flies instead of teleporting, because Jailbreak does not like big jumps. Turn the
 speed down in Travel if you get pulled back.

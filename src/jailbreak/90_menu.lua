@@ -26,6 +26,20 @@ do
         return t
     end
 
+    -- Everything that reaches into Jailbreak's own modules, and everything
+    -- that moves the character, depends on the collector handing back real Lua
+    -- objects. Where it does not, the game's anti-cheat simply puts the
+    -- character back and the module tables are unreachable — so those controls
+    -- are taken out of the menu rather than left looking operable.
+    local usable = Game.internalsReachable()
+
+    local function hide(thing)
+        if usable or not thing then return thing end
+        local node = thing.card or thing.button or thing.row or thing
+        if typeof(node) == "Instance" then node.Visible = false end
+        return thing
+    end
+
     local function robberyNames()
         local names = {}
         for _, entry in ipairs(Game.Robberies) do
@@ -171,7 +185,15 @@ do
         }))
         UI.toggle(how, opt("Rob", "Notify", {text = "Announce Each Job"}))
 
+        hide(auto)
+        hide(manual)
+        hide(safety)
+        hide(how)
+
         local board = UI.section(tab, "Robbery States")
+        if not usable then
+            UI.label(board, "Auto Rob is hidden: this executor cannot reach Jailbreak's own modules, so prompts never fire and the anti-cheat puts the character straight back. Settings shows the verdict. The board below still works — it reads replicated values.")
+        end
         for _, entry in ipairs(Game.Robberies) do
             if not entry.skip then
                 UI.readout(board, {
@@ -233,16 +255,22 @@ do
             desc = "You cannot arrest a driver, so this saves the wasted stop.",
         }))
 
+        hide(arrest)
+        hide(tuning)
+
         local aura = UI.section(tab, "Arrest Aura")
+        if not usable then
+            UI.label(aura, "The sweep is hidden: it works by moving you onto each criminal, and that movement gets reverted here. The aura does not move you, so it is worth a try with handcuffs already in hand.")
+        end
         UI.label(aura, "Stays where you are and cuffs anyone who walks into range. Nothing teleports, so this is the version that does not look like anything.")
         UI.toggle(aura, opt("Police", "Aura", {text = "Arrest Aura"}))
         UI.slider(aura, opt("Police", "AuraRange", {
             text = "Aura Range", min = 5, max = 60, step = 1, suffix = " studs",
         }))
-        UI.toggle(aura, opt("Police", "AutoArrest", {
+        hide(UI.toggle(aura, opt("Police", "AutoArrest", {
             text = "Keep Sweeping",
             desc = "Re-run Arrest Everyone whenever new criminals appear.",
-        }))
+        })))
 
         local gear = UI.section(tab, "Handcuffs")
         UI.toggle(gear, opt("Police", "AutoEquip", {
@@ -252,7 +280,7 @@ do
         UI.slider(gear, opt("Police", "CuffSlot", {
             text = "Handcuff Hotbar Slot", min = 1, max = 9, step = 1,
         }))
-        UI.readout(gear, {text = "In Hand", get = function() return Police.equipped() end})
+        hide(UI.readout(gear, {text = "In Hand", get = function() return Police.equipped() end}))
     end
 
     -- ============================================================ FARM TAB
@@ -277,6 +305,9 @@ do
         UI.slider(aura, opt("Farm", "AuraRange", {
             text = "Aura Range", min = 5, max = 80, step = 1, suffix = " studs",
         }))
+
+        hide(pickups)
+        hide(aura)
 
         local session = UI.section(tab, "Session")
         UI.toggle(session, opt("Farm", "AntiAFK", {
@@ -374,6 +405,7 @@ do
             end,
         })
         refreshWaypoints()
+        hide(tab)
     end
 
     -- ============================================================= ESP TAB
@@ -458,6 +490,7 @@ do
             text = "Fly Speed", min = 20, max = 400, step = 5,
         }))
         UI.toggle(clip, opt("Move", "Spinbot", {text = "Spinbot"}))
+        hide(tab)
     end
 
     -- ========================================================= VISUALS TAB

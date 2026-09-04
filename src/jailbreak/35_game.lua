@@ -338,6 +338,31 @@ do
         end
     end
 
+    -- The same question as the verdict, but cheap and cached: the menu is
+    -- built a second after load and cannot wait on a walk of the whole heap.
+    local reachable = nil
+
+    function Game.internalsReachable()
+        if reachable ~= nil then return reachable end
+        reachable = false
+        if collect then
+            local ok, dump = pcall(collect, true)
+            if ok and type(dump) == "table" then
+                local seen = 0
+                for _, object in pairs(dump) do
+                    local kind = type(object)
+                    if kind == "function" or kind == "table" then
+                        reachable = true
+                        break
+                    end
+                    seen = seen + 1
+                    if seen >= 5000 then break end
+                end
+            end
+        end
+        return reachable
+    end
+
     -- Plain English, so any executor can be judged in one load without
     -- reading a log: everything here needs real Lua objects out of the
     -- collector, and an executor that cannot supply them cannot run it.
