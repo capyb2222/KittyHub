@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+a9588d3e  ·  2026-09-04 04:15 UTC
+--   build 3.1.0+73ff4d8f  ·  2026-09-04 04:23 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -181,6 +181,13 @@ end
 KH.GameTag  = "JB"
 KH.GameName = "Jailbreak"
 
+-- None of these should be running before the menu has even been opened.
+KH.Volatile = {
+    "Move.Noclip", "Move.Fly",
+    "Rob.Auto", "Police.Aura", "Police.AutoArrest",
+    "Farm.Items", "Farm.InteractAura",
+}
+
 do
     -- Defaults double as the schema: a saved profile is backfilled from here
     -- and keys that no longer exist are dropped, so upgrades never half-migrate.
@@ -292,6 +299,11 @@ do
     local HttpService = KH.Services.HttpService
     local X = KH.X
     local DEFAULTS = KH.Defaults
+
+    -- Switches that are for right now, not for next time. Restoring fly or
+    -- noclip on join is never what anyone wanted, and anything that drives the
+    -- character coming back by itself is worse than losing the setting.
+    KH.Volatile = KH.Volatile or {"Move.Noclip", "Move.Fly"}
 
     -- ------------------------------------------------------------ deep merge
     local function deepCopy(t)
@@ -412,6 +424,12 @@ do
                 for k, v in pairs(values) do S[group][k] = v end
             end
         end
+        for _, path in ipairs(KH.Volatile) do
+            local group, key = path:match("^(%w+)%.(%w+)$")
+            local schema = group and DEFAULTS[group]
+            if schema and schema[key] ~= nil then S[group][key] = schema[key] end
+        end
+
         S.UI.Profile = name
         return true
     end
@@ -872,9 +890,11 @@ do
                 return
             end
             local funcs, tables, lua, withConsts, walked = 0, 0, 0, 0, 0
+            local kinds = {}
             for _, object in pairs(dump) do
                 walked = walked + 1
                 local kind = type(object)
+                kinds[kind] = (kinds[kind] or 0) + 1
                 if kind == "function" then
                     funcs = funcs + 1
                     local ok2, flag = pcall(function() return isLClosure and isLClosure(object) end)
@@ -888,8 +908,13 @@ do
                 end
                 if walked % 4000 == 0 then task.wait() end
             end
-            say(("%s = %d walked, %d functions, %d lua closures, %d readable, %d tables")
-                :format(label, walked, funcs, lua, withConsts, tables))
+            local breakdown = {}
+            for kind, count in pairs(kinds) do
+                breakdown[#breakdown + 1] = kind .. ":" .. count
+            end
+            table.sort(breakdown)
+            say(("%s = %d walked, %d lua closures, %d readable — types %s")
+                :format(label, walked, lua, withConsts, table.concat(breakdown, " ")))
         end
 
         measure("getgc()")
@@ -4271,8 +4296,11 @@ do
         Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
         -- Held for the whole job, not per hop: vault doors are solid, and with
         -- collisions off there is no floor either, so position has to be held
-        -- outright between stops.
-        if S.Rob.Noclip then Travel.hold(true) end
+        -- outright between stops. The flag is captured, not re-read: releasing
+        -- on a setting that changed mid-job would leave the character pinned
+        -- with no way to get it back.
+        local holding = S.Rob.Noclip
+        if holding then Travel.hold(true) end
 
         local ok = pcall(function()
             local point = Game.entryPoint(entry)
@@ -4315,7 +4343,7 @@ do
             end
         end)
 
-        if S.Rob.Noclip then Travel.hold(false) end
+        if holding then Travel.hold(false) end
         unmute()
 
         Rob.Busy, Rob.Current = false, nil

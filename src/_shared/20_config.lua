@@ -9,6 +9,11 @@ do
     local X = KH.X
     local DEFAULTS = KH.Defaults
 
+    -- Switches that are for right now, not for next time. Restoring fly or
+    -- noclip on join is never what anyone wanted, and anything that drives the
+    -- character coming back by itself is worse than losing the setting.
+    KH.Volatile = KH.Volatile or {"Move.Noclip", "Move.Fly"}
+
     -- ------------------------------------------------------------ deep merge
     local function deepCopy(t)
         local out = {}
@@ -128,6 +133,12 @@ do
                 for k, v in pairs(values) do S[group][k] = v end
             end
         end
+        for _, path in ipairs(KH.Volatile) do
+            local group, key = path:match("^(%w+)%.(%w+)$")
+            local schema = group and DEFAULTS[group]
+            if schema and schema[key] ~= nil then S[group][key] = schema[key] end
+        end
+
         S.UI.Profile = name
         return true
     end

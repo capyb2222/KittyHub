@@ -221,8 +221,11 @@ do
         Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
         -- Held for the whole job, not per hop: vault doors are solid, and with
         -- collisions off there is no floor either, so position has to be held
-        -- outright between stops.
-        if S.Rob.Noclip then Travel.hold(true) end
+        -- outright between stops. The flag is captured, not re-read: releasing
+        -- on a setting that changed mid-job would leave the character pinned
+        -- with no way to get it back.
+        local holding = S.Rob.Noclip
+        if holding then Travel.hold(true) end
 
         local ok = pcall(function()
             local point = Game.entryPoint(entry)
@@ -265,7 +268,7 @@ do
             end
         end)
 
-        if S.Rob.Noclip then Travel.hold(false) end
+        if holding then Travel.hold(false) end
         unmute()
 
         Rob.Busy, Rob.Current = false, nil

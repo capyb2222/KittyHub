@@ -5,6 +5,13 @@
 KH.GameTag  = "JB"
 KH.GameName = "Jailbreak"
 
+-- None of these should be running before the menu has even been opened.
+KH.Volatile = {
+    "Move.Noclip", "Move.Fly",
+    "Rob.Auto", "Police.Aura", "Police.AutoArrest",
+    "Farm.Items", "Farm.InteractAura",
+}
+
 do
     -- Defaults double as the schema: a saved profile is backfilled from here
     -- and keys that no longer exist are dropped, so upgrades never half-migrate.

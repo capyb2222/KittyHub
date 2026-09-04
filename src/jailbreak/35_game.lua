@@ -250,9 +250,11 @@ do
                 return
             end
             local funcs, tables, lua, withConsts, walked = 0, 0, 0, 0, 0
+            local kinds = {}
             for _, object in pairs(dump) do
                 walked = walked + 1
                 local kind = type(object)
+                kinds[kind] = (kinds[kind] or 0) + 1
                 if kind == "function" then
                     funcs = funcs + 1
                     local ok2, flag = pcall(function() return isLClosure and isLClosure(object) end)
@@ -266,8 +268,13 @@ do
                 end
                 if walked % 4000 == 0 then task.wait() end
             end
-            say(("%s = %d walked, %d functions, %d lua closures, %d readable, %d tables")
-                :format(label, walked, funcs, lua, withConsts, tables))
+            local breakdown = {}
+            for kind, count in pairs(kinds) do
+                breakdown[#breakdown + 1] = kind .. ":" .. count
+            end
+            table.sort(breakdown)
+            say(("%s = %d walked, %d lua closures, %d readable — types %s")
+                :format(label, walked, lua, withConsts, table.concat(breakdown, " ")))
         end
 
         measure("getgc()")
