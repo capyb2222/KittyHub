@@ -404,6 +404,18 @@ do
         return have ~= nil and cap ~= nil and cap > 0 and have >= cap
     end
 
+    -- Jailbreak keeps the server's idea of where we are on the humanoid. A gap
+    -- that grows means the movement is being rejected, and no amount of noclip
+    -- is going to help with that.
+    function Game.serverGap()
+        local hum, root = U.myHum(), U.myRoot()
+        local value = hum and hum:FindFirstChild("HumanoidUnloadServerPosition")
+        if not value or not root then return nil end
+        local ok, position = pcall(function() return value.Value end)
+        if not ok or typeof(position) ~= "Vector3" then return nil end
+        return (root.Position - position).Magnitude
+    end
+
     -- ---------------------------------------------------------------- teams
     function Game.teamName(player)
         local team = player and player.Team

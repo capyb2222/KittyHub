@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+edea93b2  ·  2026-09-04 01:39 UTC
+--   build 3.1.0+4b4a528e  ·  2026-09-04 01:52 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -1024,6 +1024,18 @@ do
     function Game.bagFull()
         local have, cap = Game.bag()
         return have ~= nil and cap ~= nil and cap > 0 and have >= cap
+    end
+
+    -- Jailbreak keeps the server's idea of where we are on the humanoid. A gap
+    -- that grows means the movement is being rejected, and no amount of noclip
+    -- is going to help with that.
+    function Game.serverGap()
+        local hum, root = U.myHum(), U.myRoot()
+        local value = hum and hum:FindFirstChild("HumanoidUnloadServerPosition")
+        if not value or not root then return nil end
+        local ok, position = pcall(function() return value.Value end)
+        if not ok or typeof(position) ~= "Vector3" then return nil end
+        return (root.Position - position).Magnitude
     end
 
     -- ---------------------------------------------------------------- teams
@@ -3527,6 +3539,7 @@ KH.Travel = Travel
 do
     local U           = KH.U
     local S           = KH.S
+    local RunService  = KH.Services.RunService
     local LocalPlayer = KH.LocalPlayer
 
     local BASE_GRAVITY = workspace.Gravity
@@ -3569,30 +3582,71 @@ do
         end
     end
 
-    -- Re-applied every frame while the lease is held: a respawn brings back a
-    -- whole new set of solid limbs, and holding it once would not cover them.
-    KH.onFrame("jb-noclip", function()
+    function Travel.held() return clipDepth > 0, depth > 0 end
+
+    -- Stepped, not the render loop: this has to be the last write before the
+    -- physics step. On the render loop the humanoid controller puts the
+    -- collisions back first, and the character bounces off the wall it should
+    -- be passing through.
+    KH.track(RunService.Stepped:Connect(function()
         if clipDepth <= 0 then return end
         local char = U.charOf(LocalPlayer)
         if not char then return end
-        for _, part in ipairs(char:GetChildren()) do
+
+        -- Descendants, every frame: a respawn brings a whole new set of solid
+        -- limbs that a one-off pass would never see.
+        for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.CanCollide then
                 held[part] = true
                 part.CanCollide = false
             end
         end
-    end, 45)
+
+        -- Parked, not falling. With collisions off there is no floor to land
+        -- on, so whatever is holding position has to hold it outright.
+        if depth > 0 then
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+    end))
+
+    -- PlatformStand takes the humanoid out of its walk and fall states.
+    -- Without it the controller spends every frame trying to put us back on
+    -- the ground, and that fight is the juddering.
+    local standing = nil
 
     local function beginFlight()
         depth = depth + 1
-        if depth == 1 then workspace.Gravity = 0 end
+        if depth == 1 then
+            workspace.Gravity = 0
+            local hum = U.myHum()
+            if hum then
+                standing = hum.PlatformStand
+                hum.PlatformStand = true
+            end
+        end
         Travel.noclip(true)
     end
 
     local function endFlight()
         depth = math.max(depth - 1, 0)
-        if depth == 0 then workspace.Gravity = BASE_GRAVITY end
+        if depth == 0 then
+            workspace.Gravity = BASE_GRAVITY
+            local hum = U.myHum()
+            if hum then hum.PlatformStand = standing or false end
+            standing = nil
+        end
         Travel.noclip(false)
+    end
+
+    -- Gravity off, collisions off, humanoid parked. Held across a whole job
+    -- rather than one hop, so the character stays where it is put between
+    -- stops instead of dropping through the floor it can no longer touch.
+    function Travel.hold(on)
+        if on then beginFlight() else endFlight() end
     end
 
     -- Gravity is world state; leaving it at zero would break the game for the
@@ -3601,6 +3655,8 @@ do
         depth, clipDepth = 0, 0
         workspace.Gravity = BASE_GRAVITY
         releaseCollisions()
+        local hum = U.myHum()
+        if hum then pcall(function() hum.PlatformStand = false end) end
     end)
 
     function Travel.stop() cancel = true end
@@ -3914,9 +3970,10 @@ do
         if not entry then return false end
 
         Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
-        -- Held for the whole job, not per hop: vault doors and laser housings
-        -- are solid, and getting in is most of what a robbery is.
-        if S.Rob.Noclip then Travel.noclip(true) end
+        -- Held for the whole job, not per hop: vault doors are solid, and with
+        -- collisions off there is no floor either, so position has to be held
+        -- outright between stops.
+        if S.Rob.Noclip then Travel.hold(true) end
 
         local ok = pcall(function()
             local point = Game.entryPoint(entry)
@@ -3958,7 +4015,7 @@ do
             end
         end)
 
-        if S.Rob.Noclip then Travel.noclip(false) end
+        if S.Rob.Noclip then Travel.hold(false) end
         unmute()
 
         Rob.Busy, Rob.Current = false, nil
@@ -4705,6 +4762,22 @@ do
             end,
         })
         UI.readout(auto, {text = "Jobs Done", get = function() return Rob.Runs end})
+        UI.readout(auto, {
+            text = "Noclip",
+            get = function()
+                local clipped, parked = Travel.held()
+                if not clipped then return "off" end
+                return parked and "held, parked" or "held"
+            end,
+        })
+        UI.readout(auto, {
+            text = "Server Gap",
+            get = function()
+                local gap = Game.serverGap()
+                if not gap then return "unknown" end
+                return ("%d studs"):format(math.floor(gap))
+            end,
+        })
 
         local manual = UI.section(tab, "Run One")
         local chosen = {name = "Rising City Bank"}
@@ -4743,8 +4816,8 @@ do
 
         local safety = UI.section(tab, "Staying Alive")
         UI.toggle(safety, opt("Rob", "Noclip", {
-            text = "Noclip Through The Job",
-            desc = "Held for the whole robbery, not just the flight. Vault doors and laser housings are solid and there is usually no way past them.",
+            text = "Hold Position And Noclip",
+            desc = "For the whole robbery, not just the flight: collisions off, gravity off, humanoid parked. Without it you bounce off the vault door, and with collisions off but gravity on you fall through the floor.",
         }))
         UI.toggle(safety, opt("Rob", "Lasers", {
             text = "Disable Lasers",

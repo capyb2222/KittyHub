@@ -12,6 +12,7 @@ KH.Travel = Travel
 do
     local U           = KH.U
     local S           = KH.S
+    local RunService  = KH.Services.RunService
     local LocalPlayer = KH.LocalPlayer
 
     local BASE_GRAVITY = workspace.Gravity
@@ -54,30 +55,71 @@ do
         end
     end
 
-    -- Re-applied every frame while the lease is held: a respawn brings back a
-    -- whole new set of solid limbs, and holding it once would not cover them.
-    KH.onFrame("jb-noclip", function()
+    function Travel.held() return clipDepth > 0, depth > 0 end
+
+    -- Stepped, not the render loop: this has to be the last write before the
+    -- physics step. On the render loop the humanoid controller puts the
+    -- collisions back first, and the character bounces off the wall it should
+    -- be passing through.
+    KH.track(RunService.Stepped:Connect(function()
         if clipDepth <= 0 then return end
         local char = U.charOf(LocalPlayer)
         if not char then return end
-        for _, part in ipairs(char:GetChildren()) do
+
+        -- Descendants, every frame: a respawn brings a whole new set of solid
+        -- limbs that a one-off pass would never see.
+        for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.CanCollide then
                 held[part] = true
                 part.CanCollide = false
             end
         end
-    end, 45)
+
+        -- Parked, not falling. With collisions off there is no floor to land
+        -- on, so whatever is holding position has to hold it outright.
+        if depth > 0 then
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+    end))
+
+    -- PlatformStand takes the humanoid out of its walk and fall states.
+    -- Without it the controller spends every frame trying to put us back on
+    -- the ground, and that fight is the juddering.
+    local standing = nil
 
     local function beginFlight()
         depth = depth + 1
-        if depth == 1 then workspace.Gravity = 0 end
+        if depth == 1 then
+            workspace.Gravity = 0
+            local hum = U.myHum()
+            if hum then
+                standing = hum.PlatformStand
+                hum.PlatformStand = true
+            end
+        end
         Travel.noclip(true)
     end
 
     local function endFlight()
         depth = math.max(depth - 1, 0)
-        if depth == 0 then workspace.Gravity = BASE_GRAVITY end
+        if depth == 0 then
+            workspace.Gravity = BASE_GRAVITY
+            local hum = U.myHum()
+            if hum then hum.PlatformStand = standing or false end
+            standing = nil
+        end
         Travel.noclip(false)
+    end
+
+    -- Gravity off, collisions off, humanoid parked. Held across a whole job
+    -- rather than one hop, so the character stays where it is put between
+    -- stops instead of dropping through the floor it can no longer touch.
+    function Travel.hold(on)
+        if on then beginFlight() else endFlight() end
     end
 
     -- Gravity is world state; leaving it at zero would break the game for the
@@ -86,6 +128,8 @@ do
         depth, clipDepth = 0, 0
         workspace.Gravity = BASE_GRAVITY
         releaseCollisions()
+        local hum = U.myHum()
+        if hum then pcall(function() hum.PlatformStand = false end) end
     end)
 
     function Travel.stop() cancel = true end

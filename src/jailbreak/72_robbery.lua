@@ -187,9 +187,10 @@ do
         if not entry then return false end
 
         Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
-        -- Held for the whole job, not per hop: vault doors and laser housings
-        -- are solid, and getting in is most of what a robbery is.
-        if S.Rob.Noclip then Travel.noclip(true) end
+        -- Held for the whole job, not per hop: vault doors are solid, and with
+        -- collisions off there is no floor either, so position has to be held
+        -- outright between stops.
+        if S.Rob.Noclip then Travel.hold(true) end
 
         local ok = pcall(function()
             local point = Game.entryPoint(entry)
@@ -231,7 +232,7 @@ do
             end
         end)
 
-        if S.Rob.Noclip then Travel.noclip(false) end
+        if S.Rob.Noclip then Travel.hold(false) end
         unmute()
 
         Rob.Busy, Rob.Current = false, nil

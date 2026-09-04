@@ -88,6 +88,22 @@ do
             end,
         })
         UI.readout(auto, {text = "Jobs Done", get = function() return Rob.Runs end})
+        UI.readout(auto, {
+            text = "Noclip",
+            get = function()
+                local clipped, parked = Travel.held()
+                if not clipped then return "off" end
+                return parked and "held, parked" or "held"
+            end,
+        })
+        UI.readout(auto, {
+            text = "Server Gap",
+            get = function()
+                local gap = Game.serverGap()
+                if not gap then return "unknown" end
+                return ("%d studs"):format(math.floor(gap))
+            end,
+        })
 
         local manual = UI.section(tab, "Run One")
         local chosen = {name = "Rising City Bank"}
@@ -126,8 +142,8 @@ do
 
         local safety = UI.section(tab, "Staying Alive")
         UI.toggle(safety, opt("Rob", "Noclip", {
-            text = "Noclip Through The Job",
-            desc = "Held for the whole robbery, not just the flight. Vault doors and laser housings are solid and there is usually no way past them.",
+            text = "Hold Position And Noclip",
+            desc = "For the whole robbery, not just the flight: collisions off, gravity off, humanoid parked. Without it you bounce off the vault door, and with collisions off but gravity on you fall through the floor.",
         }))
         UI.toggle(safety, opt("Rob", "Lasers", {
             text = "Disable Lasers",
