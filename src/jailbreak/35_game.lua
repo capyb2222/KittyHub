@@ -184,7 +184,7 @@ do
             end
             -- The dump runs long; walking it in one go would freeze the frame
             -- it started on.
-            if walked % 4000 == 0 then task.wait() end
+            if walked % 2000 == 0 then task.wait() end
         end
     end
 
@@ -266,7 +266,8 @@ do
                 elseif kind == "table" then
                     tables = tables + 1
                 end
-                if walked % 4000 == 0 then task.wait() end
+                if walked % 2000 == 0 then task.wait() end
+                if walked >= 60000 then break end
             end
             local breakdown = {}
             for kind, count in pairs(kinds) do
@@ -279,6 +280,49 @@ do
 
         measure("getgc()")
         measure("getgc(true)", true)
+
+        -- If the check was not found, the name I look for has gone stale. Show
+        -- what is actually in there instead, so the next attempt is not another
+        -- guess: every closure belonging to the player's own scripts, with the
+        -- string constants that look like they gate movement.
+        if Game.AntiCheat ~= "off" and collect and getConstants and isLClosure then
+            local WORDS = {"pcall", "cheat", "teleport", "kick", "detect", "flag",
+                           "rollback", "speed", "position", "valid"}
+            local samples, seen, walked = {}, 0, 0
+            local ok, dump = pcall(collect, true)
+            if ok and type(dump) == "table" then
+                for _, fn in pairs(dump) do
+                    walked = walked + 1
+                    if walked % 2000 == 0 then task.wait() end
+                    if walked > 60000 or #samples >= 18 then break end
+
+                    local lua = false
+                    pcall(function() lua = type(fn) == "function" and isLClosure(fn) end)
+                    if lua then
+                        local owner
+                        pcall(function() owner = getfenv(fn).script end)
+                        if owner and scripts and owner:IsDescendantOf(scripts) then
+                            seen = seen + 1
+                            local consts
+                            pcall(function() consts = getConstants(fn) end)
+                            for _, value in ipairs(type(consts) == "table" and consts or {}) do
+                                if type(value) == "string" and #value > 3 and #value < 32 then
+                                    local low = value:lower()
+                                    for _, word in ipairs(WORDS) do
+                                        if low:find(word, 1, true) then
+                                            samples[#samples + 1] = owner.Name .. "/" .. value
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            say(("player-script closures = %d, gate-ish constants = %s"):format(
+                seen, trim(table.concat(samples, " "), 700)))
+        end
 
         -- And what require actually says at each identity, in its own words.
         local target = descend(ReplicatedStorage, {"Module", "UI"})
@@ -346,9 +390,18 @@ do
             return false
         end
 
-        local walked = 0
+        -- On an executor where the dump is real this walks a very large list,
+        -- so it yields often and gives up rather than hanging the session.
+        local walked, budget = 0, os.clock() + 25
         for _, fn in pairs(objects) do
             walked = walked + 1
+            if walked % 2000 == 0 then
+                if os.clock() > budget then
+                    Game.AntiCheat = "timed out"
+                    return false
+                end
+                task.wait()
+            end
             local closure = false
             pcall(function() closure = type(fn) == "function" and isLClosure(fn) end)
             if closure then
@@ -364,7 +417,6 @@ do
                     end
                 end
             end
-            if walked % 4000 == 0 then task.wait() end
         end
 
         Game.AntiCheat = "not found"
