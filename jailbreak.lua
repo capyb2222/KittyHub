@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+d46543e1  ·  2026-09-04 03:27 UTC
+--   build 3.1.0+a9588d3e  ·  2026-09-04 04:15 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -708,9 +708,15 @@ do
         for _, path in ipairs(PATHS[name]) do
             local script = descend(ReplicatedStorage, path)
             if script and script:IsA("ModuleScript") then
-                -- 2 is the game-script identity that may require game modules;
-                -- 8 is the other one executors commonly accept.
-                found = tryRequire(script) or tryRequire(script, 2) or tryRequire(script, 8)
+                -- Roblox caches a module that failed to load as failed, for the
+                -- rest of the session. Trying at our own identity first was
+                -- poisoning the cache, so every later attempt came back with
+                -- "experienced an error while loading" and never could work.
+                if setIdentity then
+                    found = tryRequire(script, 2) or tryRequire(script, 8)
+                else
+                    found = tryRequire(script)
+                end
                 if found ~= nil then break end
             end
         end
@@ -781,7 +787,12 @@ do
         end
         if not ok or type(objects) ~= "table" then return end
 
-        for index, object in ipairs(objects) do
+        -- pairs, not ipairs: the dump this executor hands back reports a
+        -- length but does not start at index one, so an ipairs walk stopped
+        -- immediately and every search over it silently found nothing.
+        local walked = 0
+        for _, object in pairs(objects) do
+            walked = walked + 1
             if type(object) == "table" then
                 for name, test in pairs(wanted) do
                     local matched = false
@@ -793,9 +804,9 @@ do
                 end
                 if next(wanted) == nil then return end
             end
-            -- The dump runs to hundreds of thousands of objects; walking it in
-            -- one go would freeze the frame it started on.
-            if index % 4000 == 0 then task.wait() end
+            -- The dump runs long; walking it in one go would freeze the frame
+            -- it started on.
+            if walked % 4000 == 0 then task.wait() end
         end
     end
 
@@ -860,8 +871,9 @@ do
                 say(label .. " = failed")
                 return
             end
-            local funcs, tables, lua, withConsts = 0, 0, 0, 0
-            for index, object in ipairs(dump) do
+            local funcs, tables, lua, withConsts, walked = 0, 0, 0, 0, 0
+            for _, object in pairs(dump) do
+                walked = walked + 1
                 local kind = type(object)
                 if kind == "function" then
                     funcs = funcs + 1
@@ -874,10 +886,10 @@ do
                 elseif kind == "table" then
                     tables = tables + 1
                 end
-                if index % 4000 == 0 then task.wait() end
+                if walked % 4000 == 0 then task.wait() end
             end
-            say(("%s = %d objects, %d functions, %d lua closures, %d readable, %d tables")
-                :format(label, #dump, funcs, lua, withConsts, tables))
+            say(("%s = %d walked, %d functions, %d lua closures, %d readable, %d tables")
+                :format(label, walked, funcs, lua, withConsts, tables))
         end
 
         measure("getgc()")
@@ -918,13 +930,18 @@ do
             return false
         end
 
-        local ok, objects = pcall(collect)
+        local ok, objects = pcall(collect, true)
+        if not ok or type(objects) ~= "table" then
+            ok, objects = pcall(collect)
+        end
         if not ok or type(objects) ~= "table" then
             Game.AntiCheat = "no dump"
             return false
         end
 
-        for index, fn in ipairs(objects) do
+        local walked = 0
+        for _, fn in pairs(objects) do
+            walked = walked + 1
             local closure = false
             pcall(function() closure = type(fn) == "function" and isLClosure(fn) end)
             if closure then
@@ -940,7 +957,7 @@ do
                     end
                 end
             end
-            if index % 4000 == 0 then task.wait() end
+            if walked % 4000 == 0 then task.wait() end
         end
 
         Game.AntiCheat = "not found"
