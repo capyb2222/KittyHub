@@ -149,4 +149,14 @@ do
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
     print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all")
         :format(S.UI.MenuKey, S.Move.NoclipKey, S.Move.FlyKey, S.Police.ArrestKey))
+
+    -- One line saying what this executor exposes. Every Jailbreak failure looks
+    -- the same from the outside, and this is what tells them apart.
+    KH.detach(function()
+        task.wait(6)
+        local have, missing = Game.capabilities()
+        print("[Kitty Hub] executor has: " .. (have ~= "" and have or "nothing"))
+        print("[Kitty Hub] executor lacks: " .. (missing ~= "" and missing or "nothing"))
+        print("[Kitty Hub] anti-cheat: " .. tostring(Game.AntiCheat))
+    end)
 end

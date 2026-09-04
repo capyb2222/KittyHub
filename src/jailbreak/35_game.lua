@@ -119,6 +119,30 @@ do
     local collect = pick(getgc, get_gc_objects, synTable and synTable.getgc)
     Game.CanScan = collect ~= nil
 
+    local dbg = type(debug) == "table" and debug or {}
+    local getConstants = pick(getconstants, dbg.getconstants)
+    local setUpvalue   = pick(setupvalue, dbg.setupvalue)
+    local isLClosure   = pick(islclosure, is_l_closure, dbg.islclosure)
+
+    -- Printed at boot so a log says outright what this executor can and cannot
+    -- do here, instead of every failure looking the same from the outside.
+    function Game.capabilities()
+        local have, missing = {}, {}
+        local checks = {
+            getgc = collect, getconstants = getConstants, setupvalue = setUpvalue,
+            islclosure = isLClosure, setthreadidentity = setIdentity,
+            getupvalue = pick(getupvalue, dbg.getupvalue),
+            hookfunction = pick(hookfunction, replaceclosure),
+            firetouchinterest = pick(firetouchinterest),
+        }
+        for name, fn in pairs(checks) do
+            table.insert(fn and have or missing, name)
+        end
+        table.sort(have)
+        table.sort(missing)
+        return table.concat(have, " "), table.concat(missing, " ")
+    end
+
     local function scanMemory()
         if not collect then return end
 
@@ -153,8 +177,62 @@ do
         end
     end
 
+    -- --------------------------------------------------------- anti-cheat
+    -- Jailbreak's client watches for movement it did not authorise and puts you
+    -- back where you were — that pull-back is what noclip and flight run into,
+    -- not the wall itself. The check sits in a function in the player's own
+    -- LocalScript, recognisable by a constant, and flipping its second upvalue
+    -- switches it off. This is what every working Jailbreak script does.
+    Game.AntiCheat = "untried"
+
+    function Game.disableAntiCheat()
+        if not (collect and getConstants and setUpvalue and isLClosure) then
+            Game.AntiCheat = "no access"
+            return false
+        end
+
+        local scripts = LocalPlayer:FindFirstChild("PlayerScripts")
+        local owner = scripts and scripts:FindFirstChild("LocalScript")
+        if not owner then
+            Game.AntiCheat = "script not found"
+            return false
+        end
+
+        local ok, objects = pcall(collect)
+        if not ok or type(objects) ~= "table" then
+            Game.AntiCheat = "no dump"
+            return false
+        end
+
+        for index, fn in ipairs(objects) do
+            local closure = false
+            pcall(function() closure = type(fn) == "function" and isLClosure(fn) end)
+            if closure then
+                local owned = false
+                pcall(function() owned = getfenv(fn).script == owner end)
+                if owned then
+                    local consts
+                    pcall(function() consts = getConstants(fn) end)
+                    if type(consts) == "table" and table.find(consts, "FailedPcall") then
+                        local done = pcall(setUpvalue, fn, 2, true)
+                        Game.AntiCheat = done and "off" or "found, could not patch"
+                        return done
+                    end
+                end
+            end
+            if index % 4000 == 0 then task.wait() end
+        end
+
+        Game.AntiCheat = "not found"
+        return false
+    end
+
     -- Retried a few times: on a slow join ReplicatedStorage is still filling in.
     KH.spawn(function()
+        -- First, before anything else waits on anything: while this is on, no
+        -- amount of noclip or flight survives contact with it.
+        pcall(Game.disableAntiCheat)
+
         local function done()
             return M.ItemSystem ~= nil and (M.CircleAction ~= nil or M.UI ~= nil)
         end

@@ -498,6 +498,7 @@ do
             text = "Memory Scan",
             get = function() return Game.CanScan and "available" or "unavailable" end,
         },
+        {text = "Anti-Cheat", get = function() return tostring(Game.AntiCheat) end},
         {
             text = "Game Modules",
             get = function()
