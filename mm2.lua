@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Murder Mystery 2 Script
---   build 3.1.0+1c809c9f  ·  2026-09-04 04:47 UTC
+--   build 3.1.0+91464df1  ·  2026-09-04 05:15 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
@@ -282,6 +282,7 @@ do
             FlyKey        = "F",
             FlySpeed      = 70,
             Spinbot       = false,
+            SafeLand      = true,            -- never arrive at the floor fast enough to hurt
         },
         Visual = {
             Fullbright    = false,
@@ -3231,45 +3232,106 @@ do
     KH.loop(0.4, function() Move.applyHumanoid() end)
 
     -- ============================================================== NOCLIP
-    -- Original collision states are recorded so disabling noclip restores the
-    -- character exactly, rather than blanket-setting everything collidable.
-    local noclipOriginal = {}
-    local noclipConn
+    -- One owner for the character's collisions, refcounted. The toggle is one
+    -- holder and a rob routine is another: without that, a job finishing put
+    -- the collisions back underneath a noclip the player had switched on by
+    -- hand, and the toggle looked broken for the rest of the session.
+    --
+    -- Weak keys: a respawn leaves the old limbs in here, and nothing should be
+    -- keeping a destroyed character alive just to remember it was solid.
+    local clipOriginal = setmetatable({}, {__mode = "k"})
+    local clipHolders  = 0
+    local clipManual   = false
+    local clipConn
 
-    local function noclipStep()
+    -- Descendants every frame, not once: a respawn brings a whole new set of
+    -- solid limbs that a one-off pass would never see.
+    local function clipStep()
         local char = U.charOf(LocalPlayer)
         if not char then return end
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.CanCollide then
-                if noclipOriginal[part] == nil then noclipOriginal[part] = true end
+                if clipOriginal[part] == nil then clipOriginal[part] = true end
                 part.CanCollide = false
             end
         end
     end
 
+    local function clipRestore()
+        for part, wasCollidable in pairs(clipOriginal) do
+            if part.Parent and wasCollidable then
+                pcall(function() part.CanCollide = true end)
+            end
+        end
+        table.clear(clipOriginal)
+    end
+
+    -- Stepped, not the render loop: this has to be the last write before the
+    -- physics step. On the render loop the humanoid controller puts the
+    -- collisions back first, and the character bounces off the wall it should
+    -- be passing through.
+    function Move.pushNoclip()
+        clipHolders = clipHolders + 1
+        if clipHolders == 1 then
+            if not clipConn then
+                -- Not KH.track: this is disconnected below and on unload, and
+                -- tracking it would add a dead entry on every single toggle.
+                clipConn = RunService.Stepped:Connect(clipStep)
+            end
+            clipStep()   -- this frame, rather than the next one
+        end
+    end
+
+    function Move.popNoclip()
+        clipHolders = math.max(clipHolders - 1, 0)
+        if clipHolders == 0 then
+            if clipConn then
+                clipConn:Disconnect()
+                clipConn = nil
+            end
+            clipRestore()
+        end
+    end
+
+    function Move.noclipHeld() return clipHolders > 0 end
+
+    -- Seated, it is the vehicle that collides with the world and not the
+    -- character, so switching the character's collisions off does nothing at
+    -- all. Say that outright instead of leaving a toggle that looks on and
+    -- changes nothing.
+    function Move.noclipBlocked()
+        local hum = U.myHum()
+        if hum and hum.SeatPart then
+            return "You are in a vehicle — noclip only moves your character."
+        end
+        return nil
+    end
+
     function Move.setNoclip(on)
+        on = on and true or false
+        if on ~= clipManual then
+            clipManual = on
+            if on then Move.pushNoclip() else Move.popNoclip() end
+        end
         S.Move.Noclip = on
         if on then
-            -- Not KH.track: this is disconnected below and on unload, and
-            -- tracking it would add a dead entry on every single toggle.
-            if not noclipConn then
-                noclipConn = RunService.Stepped:Connect(noclipStep)
-            end
-        else
-            if noclipConn then
-                noclipConn:Disconnect()
-                noclipConn = nil
-            end
-            for part, wasCollidable in pairs(noclipOriginal) do
-                if part.Parent and wasCollidable then
-                    pcall(function() part.CanCollide = true end)
-                end
-            end
-            noclipOriginal = {}
+            local why = Move.noclipBlocked()
+            if why then UI.notify({title = "Noclip", text = why, kind = "warn"}) end
         end
         UI.refreshKeybinds()
     end
-    KH.undo(function() Move.setNoclip(false) end)
+
+    -- Unload drops every holder, not just the manual one: a job cut short by
+    -- an unload would otherwise leave the character permanently intangible.
+    KH.undo(function()
+        clipManual, clipHolders = false, 0
+        S.Move.Noclip = false
+        if clipConn then
+            clipConn:Disconnect()
+            clipConn = nil
+        end
+        clipRestore()
+    end)
 
     -- ================================================== INFINITE JUMP / BHOP
     KH.track(UserInputService.JumpRequest:Connect(function()
@@ -3292,12 +3354,44 @@ do
         end
     end, 62)
 
+    -- ======================================================== SAFE LANDING
+    -- Roblox itself has no fall damage; Jailbreak adds its own and reads it
+    -- off how fast you arrive. Flying is therefore safe right up until the
+    -- moment it stops, which is why "fly works but going down kills you".
+    -- Everything below exists to make sure the character never reaches the
+    -- floor faster than a walk off a kerb.
+    local groundParams = RaycastParams.new()
+    groundParams.FilterType = Enum.RaycastFilterType.Exclude
+    -- Only real floors count. Without this the probe stops on glass canopies
+    -- and decorative volumes, and the descent brakes for scenery it would have
+    -- passed straight through.
+    pcall(function() groundParams.RespectCanCollide = true end)
+    pcall(function() groundParams.IgnoreWater = true end)
+
+    -- Studs to whatever is under the character, or nil for nothing in reach.
+    -- The character is excluded so noclip does not read its own legs as floor.
+    local function groundDrop(root, reach)
+        groundParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        local hit = workspace:Raycast(root.Position, Vector3.new(0, -(reach or 600), 0), groundParams)
+        return hit and (root.Position.Y - hit.Position.Y) or nil
+    end
+
+    -- The fastest descent that still lands softly from here: a ramp, so a long
+    -- drop stays quick at the top and only bleeds off near the ground. Capped,
+    -- because the ramp alone asks for two thousand studs a second from the top
+    -- of a skyscraper, and that is a speed check of its own.
+    local function descentSpeed(drop)
+        return math.min(math.max(drop - 4, 0) * 2.2 + 8, 200)
+    end
+
     -- ================================================================= FLY
     local flyVelocity, flyGyro
-    local flying = false
+    local flying  = false
+    local landing = false        -- flying the character down after fly was cut
+    local landingUntil = 0
 
     local function stopFly()
-        flying = false
+        flying, landing = false, false
         if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
         if flyGyro then flyGyro:Destroy(); flyGyro = nil end
         local hum = U.myHum()
@@ -3325,14 +3419,53 @@ do
         return true
     end
 
+    -- Letting go three hundred studs up is not a landing, it is a death, so
+    -- switching fly off in mid-air keeps the flight parts and flies the
+    -- character down instead. PlatformStand stays on the whole way, so a game
+    -- reading fall damage off the humanoid freefall state never sees one.
+    local function beginLanding()
+        local root = U.myRoot()
+        if not root or not flyVelocity or not flyVelocity.Parent then return false end
+        local drop = groundDrop(root, 900)
+        if not drop or drop <= 6 then return false end
+        landing = true
+        landingUntil = os.clock() + 15
+        return true
+    end
+
+    local function stepLanding()
+        local root = U.myRoot()
+        if not root or not flyVelocity or not flyVelocity.Parent then
+            stopFly()
+            return
+        end
+
+        local drop = groundDrop(root, 900)
+        -- Nothing underneath at all means the void, and hanging there forever
+        -- helps nobody; the timeout hands the character back either way.
+        if not drop or drop <= 4 or os.clock() > landingUntil then
+            stopFly()
+            root.AssemblyLinearVelocity = Vector3.zero
+            return
+        end
+        flyVelocity.Velocity = Vector3.new(0, -descentSpeed(drop), 0)
+    end
+
+    function Move.landing() return landing end
+
     function Move.setFly(on)
         S.Move.Fly = on
         if on then
-            if not startFly() then
-                S.Move.Fly = false
-                UI.notify({title = "Fly", text = "No character to attach to.", kind = "bad"})
+            landing = false
+            -- Already holding the flight parts? Resume rather than rebuild:
+            -- this is the path taken when fly is switched back on mid-landing.
+            if not (flying and flyVelocity and flyVelocity.Parent) then
+                if not startFly() then
+                    S.Move.Fly = false
+                    UI.notify({title = "Fly", text = "No character to attach to.", kind = "bad"})
+                end
             end
-        else
+        elseif not (S.Move.SafeLand and beginLanding()) then
             stopFly()
         end
         UI.refreshKeybinds()
@@ -3340,6 +3473,10 @@ do
     KH.undo(function() stopFly() end)
 
     KH.onFrame("fly", function()
+        if landing then
+            stepLanding()
+            return
+        end
         if not S.Move.Fly then
             if flying then stopFly() end
             return
@@ -3364,9 +3501,61 @@ do
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then direction = direction - Vector3.new(0, 1, 0) end
 
         if direction.Magnitude > 0 then direction = direction.Unit end
-        flyVelocity.Velocity = direction * S.Move.FlySpeed
+        local velocity = direction * S.Move.FlySpeed
+
+        -- Diving into the floor at flight speed is the other way flight kills
+        -- you: the fall damage does not care that a BodyVelocity put you there.
+        if S.Move.SafeLand and velocity.Y < 0 then
+            local root = U.myRoot()
+            local drop = root and groundDrop(root, 600)
+            if drop then
+                local allowed = descentSpeed(drop)
+                if -velocity.Y > allowed then
+                    velocity = Vector3.new(velocity.X, -allowed, velocity.Z)
+                end
+            end
+        end
+
+        flyVelocity.Velocity = velocity
         flyGyro.CFrame = cam.CFrame
     end, 61)
+
+    -- Falls that did not start as flight: walking off a roof, a jump gone
+    -- wrong, a teleport that dropped short. Once this latches on it stays on
+    -- until the character is back on the ground, because releasing at a speed
+    -- threshold only lets gravity build the speed straight back up.
+    local braking = false
+
+    KH.onFrame("safe-land", function()
+        if not S.Move.SafeLand or flying or landing or Move.noclipHeld() then
+            braking = false
+            return
+        end
+        local root, hum = U.myRoot(), U.myHum()
+        if not root or not hum then
+            braking = false
+            return
+        end
+
+        local velocity = root.AssemblyLinearVelocity
+        if not braking then
+            -- About twelve studs of fall. Below that nothing hurts, and
+            -- clamping it would make every ordinary jump feel like a landing.
+            if velocity.Y > -70 then return end
+            braking = true
+        end
+        if velocity.Y >= 0 or hum.FloorMaterial ~= Enum.Material.Air then
+            braking = false
+            return
+        end
+
+        local drop = groundDrop(root, 700)
+        if not drop then return end
+        local allowed = descentSpeed(drop)
+        if -velocity.Y > allowed then
+            root.AssemblyLinearVelocity = Vector3.new(velocity.X, -allowed, velocity.Z)
+        end
+    end, 59)
 
     -- ============================================================= SPINBOT
     KH.onFrame("spinbot", function()
@@ -6475,6 +6664,10 @@ do
         }))
         UI.toggle(clip, opt("Move", "Spinbot", {
             text = "Spinbot", desc = "Constantly rotate your character.",
+        }))
+        UI.toggle(clip, opt("Move", "SafeLand", {
+            text = "Safe Landing",
+            desc = "Fly down instead of dropping when fly is switched off in the air, and slow any long fall before it lands.",
         }))
 
         local teleport = UI.section(tab, "Teleport")

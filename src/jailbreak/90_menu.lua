@@ -287,6 +287,34 @@ do
     do
         local tab = UI.addTab("Farm")
 
+        local manual = UI.section(tab, "Manual Farm")
+        UI.label(manual, "Farms wherever you already are. It never moves your character, so nothing it does can be rejected as a teleport — you drive to a robbery, park in it, and this works the room. The only farm that still does anything on an executor that cannot reach the game's modules.")
+        UI.toggle(manual, opt("Farm", "Manual", {
+            text = "Manual Farm",
+            desc = "Hold the interact key and grab what is in reach, and nothing else.",
+            onSet = function(on) Farm.setManual(on) end,
+        }))
+        UI.keybind(manual, opt("Farm", "ManualKey", {text = "Manual Farm Key"}))
+        UI.toggle(manual, opt("Farm", "HoldInteract", {
+            text = "Hold Interact",
+            desc = "Holds the game's own key down so the rob circle fills by itself.",
+        }))
+        UI.keybind(manual, opt("Farm", "InteractKey", {text = "Interact Key"}))
+        UI.toggle(manual, opt("Farm", "GrabLoot", {
+            text = "Grab What Is In Reach",
+            desc = "Touch loot and dropped pickups near you without walking onto them.",
+        }))
+        UI.slider(manual, opt("Farm", "GrabRadius", {
+            text = "Reach", min = 5, max = 100, step = 1, suffix = " studs",
+        }))
+        UI.readout(manual, {text = "Status", get = function() return Farm.Status end})
+        UI.readout(manual, {text = "Grabbed", get = function() return Farm.Grabbed end})
+        UI.readout(manual, {text = "Interact Key", get = function() return Farm.InputOK end})
+        UI.readout(manual, {
+            text = "Touch",
+            get = function() return KH.X.firetouch and "available" or "unavailable" end,
+        })
+
         local pickups = UI.section(tab, "Pickups")
         UI.toggle(pickups, opt("Farm", "Items", {
             text = "Collect Dropped Items",
@@ -306,7 +334,6 @@ do
             text = "Aura Range", min = 5, max = 80, step = 1, suffix = " studs",
         }))
 
-        hide(pickups)
         hide(aura)
 
         local session = UI.section(tab, "Session")
@@ -475,6 +502,9 @@ do
         UI.toggle(speed, opt("Move", "Bhop", {text = "Bunny Hop"}))
 
         local clip = UI.section(tab, "Noclip & Fly")
+        if not usable then
+            UI.label(clip, "Noclip switches your collisions off, and it does that here — but Jailbreak's client watches for movement it did not authorise and puts you back. Switching that check off needs getgc, and this executor does not have it, so expect walls to hold. Everything else on this tab is plain client physics and works regardless.")
+        end
         UI.toggle(clip, opt("Move", "Noclip", {
             text = "Noclip",
             onSet = function(on) Move.setNoclip(on) end,
@@ -490,7 +520,13 @@ do
             text = "Fly Speed", min = 20, max = 400, step = 5,
         }))
         UI.toggle(clip, opt("Move", "Spinbot", {text = "Spinbot"}))
-        hide(tab)
+
+        local landing = UI.section(tab, "Falling")
+        UI.label(landing, "Roblox has no fall damage of its own — Jailbreak adds it, and reads it off how fast you arrive. Flight is safe until it stops, which is why switching it off in the air is what kills you.")
+        UI.toggle(landing, opt("Move", "SafeLand", {
+            text = "Safe Landing",
+            desc = "Fly the character down instead of dropping it, and slow any long fall before it lands.",
+        }))
     end
 
     -- ========================================================= VISUALS TAB

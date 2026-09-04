@@ -9,7 +9,7 @@ KH.GameName = "Jailbreak"
 KH.Volatile = {
     "Move.Noclip", "Move.Fly",
     "Rob.Auto", "Police.Aura", "Police.AutoArrest",
-    "Farm.Items", "Farm.InteractAura",
+    "Farm.Items", "Farm.InteractAura", "Farm.Manual",
 }
 
 do
@@ -58,6 +58,14 @@ do
             ItemRadius    = 300,
             InteractAura  = false,           -- fire any prompt in range
             AuraRange     = 24,
+            -- Manual farm: works the spot you are standing in and never moves
+            -- the character, so nothing it does can be read as a teleport.
+            Manual        = false,
+            ManualKey     = "G",
+            HoldInteract  = true,            -- hold the game's own interact key
+            InteractKey   = "E",
+            GrabLoot      = true,            -- touch loot and pickups within reach
+            GrabRadius    = 30,
             AntiAFK       = true,
         },
         ESP = {
@@ -87,6 +95,7 @@ do
             FlyKey        = "F",
             FlySpeed      = 90,
             Spinbot       = false,
+            SafeLand      = true,            -- never arrive at the floor fast enough to hurt
         },
         Visual = {
             Fullbright    = false,

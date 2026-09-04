@@ -12,78 +12,47 @@ KH.Travel = Travel
 do
     local U           = KH.U
     local S           = KH.S
+    local Move        = KH.Move
     local RunService  = KH.Services.RunService
     local LocalPlayer = KH.LocalPlayer
 
     local BASE_GRAVITY = workspace.Gravity
-    local held = {}      -- parts we switched off, and only those
     local depth = 0
     local cancel = false
 
     Travel.Busy = false
 
-    local function holdCollisions()
-        local char = U.charOf(LocalPlayer)
-        if not char then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                held[part] = true
-                part.CanCollide = false
-            end
-        end
-    end
-
-    local function releaseCollisions()
-        for part in pairs(held) do
-            if part.Parent then pcall(function() part.CanCollide = true end) end
-        end
-        table.clear(held)
-    end
-
     -- Noclip is refcounted and separate from the flight, so a rob routine can
     -- hold it for a whole job. Vault doors and laser housings are solid, and a
     -- character that has to squeeze past them never gets in.
+    --
+    -- The refcount and the collision bookkeeping both live in the shared
+    -- movement module. Keeping a second copy here meant a job finishing put
+    -- the collisions back under a noclip the player had switched on by hand,
+    -- and from then on the toggle did nothing at all.
     local clipDepth = 0
 
     function Travel.noclip(on)
         if on then
             clipDepth = clipDepth + 1
-            if clipDepth == 1 then holdCollisions() end
-        else
-            clipDepth = math.max(clipDepth - 1, 0)
-            if clipDepth == 0 then releaseCollisions() end
+            Move.pushNoclip()
+        elseif clipDepth > 0 then
+            clipDepth = clipDepth - 1
+            Move.popNoclip()
         end
     end
 
     function Travel.held() return clipDepth > 0, depth > 0 end
 
-    -- Stepped, not the render loop: this has to be the last write before the
-    -- physics step. On the render loop the humanoid controller puts the
-    -- collisions back first, and the character bounces off the wall it should
-    -- be passing through.
+    -- Parked, not falling. With collisions off there is no floor to land on,
+    -- so whatever is holding position has to hold it outright. Stepped, so it
+    -- is the last write before the physics step.
     KH.track(RunService.Stepped:Connect(function()
-        if clipDepth <= 0 then return end
-        local char = U.charOf(LocalPlayer)
-        if not char then return end
-
-        -- Descendants, every frame: a respawn brings a whole new set of solid
-        -- limbs that a one-off pass would never see.
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                held[part] = true
-                part.CanCollide = false
-            end
-        end
-
-        -- Parked, not falling. With collisions off there is no floor to land
-        -- on, so whatever is holding position has to hold it outright.
-        if depth > 0 then
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if root then
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-        end
+        if depth <= 0 then return end
+        local root = U.myRoot()
+        if not root then return end
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
     end))
 
     -- PlatformStand takes the humanoid out of its walk and fall states.
@@ -125,9 +94,9 @@ do
     -- Gravity is world state; leaving it at zero would break the game for the
     -- rest of the session, so unload puts it back whatever else happened.
     KH.undo(function()
-        depth, clipDepth = 0, 0
+        while clipDepth > 0 do Travel.noclip(false) end
+        depth = 0
         workspace.Gravity = BASE_GRAVITY
-        releaseCollisions()
         local hum = U.myHum()
         if hum then pcall(function() hum.PlatformStand = false end) end
     end)

@@ -106,6 +106,7 @@ do
             FlyKey        = "F",
             FlySpeed      = 70,
             Spinbot       = false,
+            SafeLand      = true,            -- never arrive at the floor fast enough to hurt
         },
         Visual = {
             Fullbright    = false,

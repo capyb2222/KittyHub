@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+6c5b6400  ·  2026-09-04 04:47 UTC
+--   build 3.1.0+907d887d  ·  2026-09-04 05:15 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -185,7 +185,7 @@ KH.GameName = "Jailbreak"
 KH.Volatile = {
     "Move.Noclip", "Move.Fly",
     "Rob.Auto", "Police.Aura", "Police.AutoArrest",
-    "Farm.Items", "Farm.InteractAura",
+    "Farm.Items", "Farm.InteractAura", "Farm.Manual",
 }
 
 do
@@ -234,6 +234,14 @@ do
             ItemRadius    = 300,
             InteractAura  = false,           -- fire any prompt in range
             AuraRange     = 24,
+            -- Manual farm: works the spot you are standing in and never moves
+            -- the character, so nothing it does can be read as a teleport.
+            Manual        = false,
+            ManualKey     = "G",
+            HoldInteract  = true,            -- hold the game's own interact key
+            InteractKey   = "E",
+            GrabLoot      = true,            -- touch loot and pickups within reach
+            GrabRadius    = 30,
             AntiAFK       = true,
         },
         ESP = {
@@ -263,6 +271,7 @@ do
             FlyKey        = "F",
             FlySpeed      = 90,
             Spinbot       = false,
+            SafeLand      = true,            -- never arrive at the floor fast enough to hurt
         },
         Visual = {
             Fullbright    = false,
@@ -1539,6 +1548,35 @@ do
             if name:find(word, 1, true) then return true end
         end
         return false
+    end
+
+    -- Everything loot-shaped within reach of a point, nearest first. The
+    -- robbery-scoped version below searches a robbery's own model; this one is
+    -- for the manual farm, which has no robbery to scope to — it is whatever
+    -- happens to be around the character, so the radius is kept small.
+    function Game.lootAround(position, radius)
+        local found = {}
+        if typeof(position) ~= "Vector3" then return found end
+
+        local params = OverlapParams.new()
+        params.MaxParts = 500
+        local ok, parts = pcall(function()
+            return workspace:GetPartBoundsInRadius(position, math.min(radius or 30, 100), params)
+        end)
+        if not ok or typeof(parts) ~= "table" then return found end
+
+        local mine = LocalPlayer.Character
+        for _, part in ipairs(parts) do
+            if part:IsA("BasePart") and looksLikeLoot(part)
+                and not (mine and part:IsDescendantOf(mine)) then
+                found[#found + 1] = part
+            end
+        end
+
+        table.sort(found, function(a, b)
+            return (a.Position - position).Magnitude < (b.Position - position).Magnitude
+        end)
+        return found
     end
 
     -- What is worth standing on inside one robbery, nearest to its centre
@@ -3447,45 +3485,106 @@ do
     KH.loop(0.4, function() Move.applyHumanoid() end)
 
     -- ============================================================== NOCLIP
-    -- Original collision states are recorded so disabling noclip restores the
-    -- character exactly, rather than blanket-setting everything collidable.
-    local noclipOriginal = {}
-    local noclipConn
+    -- One owner for the character's collisions, refcounted. The toggle is one
+    -- holder and a rob routine is another: without that, a job finishing put
+    -- the collisions back underneath a noclip the player had switched on by
+    -- hand, and the toggle looked broken for the rest of the session.
+    --
+    -- Weak keys: a respawn leaves the old limbs in here, and nothing should be
+    -- keeping a destroyed character alive just to remember it was solid.
+    local clipOriginal = setmetatable({}, {__mode = "k"})
+    local clipHolders  = 0
+    local clipManual   = false
+    local clipConn
 
-    local function noclipStep()
+    -- Descendants every frame, not once: a respawn brings a whole new set of
+    -- solid limbs that a one-off pass would never see.
+    local function clipStep()
         local char = U.charOf(LocalPlayer)
         if not char then return end
         for _, part in ipairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.CanCollide then
-                if noclipOriginal[part] == nil then noclipOriginal[part] = true end
+                if clipOriginal[part] == nil then clipOriginal[part] = true end
                 part.CanCollide = false
             end
         end
     end
 
+    local function clipRestore()
+        for part, wasCollidable in pairs(clipOriginal) do
+            if part.Parent and wasCollidable then
+                pcall(function() part.CanCollide = true end)
+            end
+        end
+        table.clear(clipOriginal)
+    end
+
+    -- Stepped, not the render loop: this has to be the last write before the
+    -- physics step. On the render loop the humanoid controller puts the
+    -- collisions back first, and the character bounces off the wall it should
+    -- be passing through.
+    function Move.pushNoclip()
+        clipHolders = clipHolders + 1
+        if clipHolders == 1 then
+            if not clipConn then
+                -- Not KH.track: this is disconnected below and on unload, and
+                -- tracking it would add a dead entry on every single toggle.
+                clipConn = RunService.Stepped:Connect(clipStep)
+            end
+            clipStep()   -- this frame, rather than the next one
+        end
+    end
+
+    function Move.popNoclip()
+        clipHolders = math.max(clipHolders - 1, 0)
+        if clipHolders == 0 then
+            if clipConn then
+                clipConn:Disconnect()
+                clipConn = nil
+            end
+            clipRestore()
+        end
+    end
+
+    function Move.noclipHeld() return clipHolders > 0 end
+
+    -- Seated, it is the vehicle that collides with the world and not the
+    -- character, so switching the character's collisions off does nothing at
+    -- all. Say that outright instead of leaving a toggle that looks on and
+    -- changes nothing.
+    function Move.noclipBlocked()
+        local hum = U.myHum()
+        if hum and hum.SeatPart then
+            return "You are in a vehicle — noclip only moves your character."
+        end
+        return nil
+    end
+
     function Move.setNoclip(on)
+        on = on and true or false
+        if on ~= clipManual then
+            clipManual = on
+            if on then Move.pushNoclip() else Move.popNoclip() end
+        end
         S.Move.Noclip = on
         if on then
-            -- Not KH.track: this is disconnected below and on unload, and
-            -- tracking it would add a dead entry on every single toggle.
-            if not noclipConn then
-                noclipConn = RunService.Stepped:Connect(noclipStep)
-            end
-        else
-            if noclipConn then
-                noclipConn:Disconnect()
-                noclipConn = nil
-            end
-            for part, wasCollidable in pairs(noclipOriginal) do
-                if part.Parent and wasCollidable then
-                    pcall(function() part.CanCollide = true end)
-                end
-            end
-            noclipOriginal = {}
+            local why = Move.noclipBlocked()
+            if why then UI.notify({title = "Noclip", text = why, kind = "warn"}) end
         end
         UI.refreshKeybinds()
     end
-    KH.undo(function() Move.setNoclip(false) end)
+
+    -- Unload drops every holder, not just the manual one: a job cut short by
+    -- an unload would otherwise leave the character permanently intangible.
+    KH.undo(function()
+        clipManual, clipHolders = false, 0
+        S.Move.Noclip = false
+        if clipConn then
+            clipConn:Disconnect()
+            clipConn = nil
+        end
+        clipRestore()
+    end)
 
     -- ================================================== INFINITE JUMP / BHOP
     KH.track(UserInputService.JumpRequest:Connect(function()
@@ -3508,12 +3607,44 @@ do
         end
     end, 62)
 
+    -- ======================================================== SAFE LANDING
+    -- Roblox itself has no fall damage; Jailbreak adds its own and reads it
+    -- off how fast you arrive. Flying is therefore safe right up until the
+    -- moment it stops, which is why "fly works but going down kills you".
+    -- Everything below exists to make sure the character never reaches the
+    -- floor faster than a walk off a kerb.
+    local groundParams = RaycastParams.new()
+    groundParams.FilterType = Enum.RaycastFilterType.Exclude
+    -- Only real floors count. Without this the probe stops on glass canopies
+    -- and decorative volumes, and the descent brakes for scenery it would have
+    -- passed straight through.
+    pcall(function() groundParams.RespectCanCollide = true end)
+    pcall(function() groundParams.IgnoreWater = true end)
+
+    -- Studs to whatever is under the character, or nil for nothing in reach.
+    -- The character is excluded so noclip does not read its own legs as floor.
+    local function groundDrop(root, reach)
+        groundParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        local hit = workspace:Raycast(root.Position, Vector3.new(0, -(reach or 600), 0), groundParams)
+        return hit and (root.Position.Y - hit.Position.Y) or nil
+    end
+
+    -- The fastest descent that still lands softly from here: a ramp, so a long
+    -- drop stays quick at the top and only bleeds off near the ground. Capped,
+    -- because the ramp alone asks for two thousand studs a second from the top
+    -- of a skyscraper, and that is a speed check of its own.
+    local function descentSpeed(drop)
+        return math.min(math.max(drop - 4, 0) * 2.2 + 8, 200)
+    end
+
     -- ================================================================= FLY
     local flyVelocity, flyGyro
-    local flying = false
+    local flying  = false
+    local landing = false        -- flying the character down after fly was cut
+    local landingUntil = 0
 
     local function stopFly()
-        flying = false
+        flying, landing = false, false
         if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
         if flyGyro then flyGyro:Destroy(); flyGyro = nil end
         local hum = U.myHum()
@@ -3541,14 +3672,53 @@ do
         return true
     end
 
+    -- Letting go three hundred studs up is not a landing, it is a death, so
+    -- switching fly off in mid-air keeps the flight parts and flies the
+    -- character down instead. PlatformStand stays on the whole way, so a game
+    -- reading fall damage off the humanoid freefall state never sees one.
+    local function beginLanding()
+        local root = U.myRoot()
+        if not root or not flyVelocity or not flyVelocity.Parent then return false end
+        local drop = groundDrop(root, 900)
+        if not drop or drop <= 6 then return false end
+        landing = true
+        landingUntil = os.clock() + 15
+        return true
+    end
+
+    local function stepLanding()
+        local root = U.myRoot()
+        if not root or not flyVelocity or not flyVelocity.Parent then
+            stopFly()
+            return
+        end
+
+        local drop = groundDrop(root, 900)
+        -- Nothing underneath at all means the void, and hanging there forever
+        -- helps nobody; the timeout hands the character back either way.
+        if not drop or drop <= 4 or os.clock() > landingUntil then
+            stopFly()
+            root.AssemblyLinearVelocity = Vector3.zero
+            return
+        end
+        flyVelocity.Velocity = Vector3.new(0, -descentSpeed(drop), 0)
+    end
+
+    function Move.landing() return landing end
+
     function Move.setFly(on)
         S.Move.Fly = on
         if on then
-            if not startFly() then
-                S.Move.Fly = false
-                UI.notify({title = "Fly", text = "No character to attach to.", kind = "bad"})
+            landing = false
+            -- Already holding the flight parts? Resume rather than rebuild:
+            -- this is the path taken when fly is switched back on mid-landing.
+            if not (flying and flyVelocity and flyVelocity.Parent) then
+                if not startFly() then
+                    S.Move.Fly = false
+                    UI.notify({title = "Fly", text = "No character to attach to.", kind = "bad"})
+                end
             end
-        else
+        elseif not (S.Move.SafeLand and beginLanding()) then
             stopFly()
         end
         UI.refreshKeybinds()
@@ -3556,6 +3726,10 @@ do
     KH.undo(function() stopFly() end)
 
     KH.onFrame("fly", function()
+        if landing then
+            stepLanding()
+            return
+        end
         if not S.Move.Fly then
             if flying then stopFly() end
             return
@@ -3580,9 +3754,61 @@ do
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then direction = direction - Vector3.new(0, 1, 0) end
 
         if direction.Magnitude > 0 then direction = direction.Unit end
-        flyVelocity.Velocity = direction * S.Move.FlySpeed
+        local velocity = direction * S.Move.FlySpeed
+
+        -- Diving into the floor at flight speed is the other way flight kills
+        -- you: the fall damage does not care that a BodyVelocity put you there.
+        if S.Move.SafeLand and velocity.Y < 0 then
+            local root = U.myRoot()
+            local drop = root and groundDrop(root, 600)
+            if drop then
+                local allowed = descentSpeed(drop)
+                if -velocity.Y > allowed then
+                    velocity = Vector3.new(velocity.X, -allowed, velocity.Z)
+                end
+            end
+        end
+
+        flyVelocity.Velocity = velocity
         flyGyro.CFrame = cam.CFrame
     end, 61)
+
+    -- Falls that did not start as flight: walking off a roof, a jump gone
+    -- wrong, a teleport that dropped short. Once this latches on it stays on
+    -- until the character is back on the ground, because releasing at a speed
+    -- threshold only lets gravity build the speed straight back up.
+    local braking = false
+
+    KH.onFrame("safe-land", function()
+        if not S.Move.SafeLand or flying or landing or Move.noclipHeld() then
+            braking = false
+            return
+        end
+        local root, hum = U.myRoot(), U.myHum()
+        if not root or not hum then
+            braking = false
+            return
+        end
+
+        local velocity = root.AssemblyLinearVelocity
+        if not braking then
+            -- About twelve studs of fall. Below that nothing hurts, and
+            -- clamping it would make every ordinary jump feel like a landing.
+            if velocity.Y > -70 then return end
+            braking = true
+        end
+        if velocity.Y >= 0 or hum.FloorMaterial ~= Enum.Material.Air then
+            braking = false
+            return
+        end
+
+        local drop = groundDrop(root, 700)
+        if not drop then return end
+        local allowed = descentSpeed(drop)
+        if -velocity.Y > allowed then
+            root.AssemblyLinearVelocity = Vector3.new(velocity.X, -allowed, velocity.Z)
+        end
+    end, 59)
 
     -- ============================================================= SPINBOT
     KH.onFrame("spinbot", function()
@@ -3930,78 +4156,47 @@ KH.Travel = Travel
 do
     local U           = KH.U
     local S           = KH.S
+    local Move        = KH.Move
     local RunService  = KH.Services.RunService
     local LocalPlayer = KH.LocalPlayer
 
     local BASE_GRAVITY = workspace.Gravity
-    local held = {}      -- parts we switched off, and only those
     local depth = 0
     local cancel = false
 
     Travel.Busy = false
 
-    local function holdCollisions()
-        local char = U.charOf(LocalPlayer)
-        if not char then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                held[part] = true
-                part.CanCollide = false
-            end
-        end
-    end
-
-    local function releaseCollisions()
-        for part in pairs(held) do
-            if part.Parent then pcall(function() part.CanCollide = true end) end
-        end
-        table.clear(held)
-    end
-
     -- Noclip is refcounted and separate from the flight, so a rob routine can
     -- hold it for a whole job. Vault doors and laser housings are solid, and a
     -- character that has to squeeze past them never gets in.
+    --
+    -- The refcount and the collision bookkeeping both live in the shared
+    -- movement module. Keeping a second copy here meant a job finishing put
+    -- the collisions back under a noclip the player had switched on by hand,
+    -- and from then on the toggle did nothing at all.
     local clipDepth = 0
 
     function Travel.noclip(on)
         if on then
             clipDepth = clipDepth + 1
-            if clipDepth == 1 then holdCollisions() end
-        else
-            clipDepth = math.max(clipDepth - 1, 0)
-            if clipDepth == 0 then releaseCollisions() end
+            Move.pushNoclip()
+        elseif clipDepth > 0 then
+            clipDepth = clipDepth - 1
+            Move.popNoclip()
         end
     end
 
     function Travel.held() return clipDepth > 0, depth > 0 end
 
-    -- Stepped, not the render loop: this has to be the last write before the
-    -- physics step. On the render loop the humanoid controller puts the
-    -- collisions back first, and the character bounces off the wall it should
-    -- be passing through.
+    -- Parked, not falling. With collisions off there is no floor to land on,
+    -- so whatever is holding position has to hold it outright. Stepped, so it
+    -- is the last write before the physics step.
     KH.track(RunService.Stepped:Connect(function()
-        if clipDepth <= 0 then return end
-        local char = U.charOf(LocalPlayer)
-        if not char then return end
-
-        -- Descendants, every frame: a respawn brings a whole new set of solid
-        -- limbs that a one-off pass would never see.
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                held[part] = true
-                part.CanCollide = false
-            end
-        end
-
-        -- Parked, not falling. With collisions off there is no floor to land
-        -- on, so whatever is holding position has to hold it outright.
-        if depth > 0 then
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if root then
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-        end
+        if depth <= 0 then return end
+        local root = U.myRoot()
+        if not root then return end
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
     end))
 
     -- PlatformStand takes the humanoid out of its walk and fall states.
@@ -4043,9 +4238,9 @@ do
     -- Gravity is world state; leaving it at zero would break the game for the
     -- rest of the session, so unload puts it back whatever else happened.
     KH.undo(function()
-        depth, clipDepth = 0, 0
+        while clipDepth > 0 do Travel.noclip(false) end
+        depth = 0
         workspace.Gravity = BASE_GRAVITY
-        releaseCollisions()
         local hum = U.myHum()
         if hum then pcall(function() hum.PlatformStand = false end) end
     end)
@@ -4793,12 +4988,19 @@ end
 
 -- ============================================================================
 --  FARM — the bits of grinding that are not a robbery
+--
+--  Two shapes of farm live here. The auto one flies the character to what it
+--  wants; the manual one never moves it at all and works whatever the player
+--  has driven up to. The manual one exists because a flight is the part the
+--  game is most likely to reject, and on an executor that cannot reach the
+--  game's own modules it is the only farm that still does anything.
 -- ============================================================================
 
 local Farm = {}
 KH.Farm = Farm
 
 do
+    local UI          = KH.UI
     local U           = KH.U
     local S           = KH.S
     local Game        = KH.Game
@@ -4809,6 +5011,8 @@ do
     local VirtualUser = KH.Services.VirtualUser
 
     Farm.Collected = 0
+    Farm.Grabbed   = 0
+    Farm.Status    = "Off"
 
     -- --------------------------------------------------------------- items
     -- Dropped pickups live in workspace.Items. Collecting one is standing on
@@ -4841,6 +5045,30 @@ do
         return best
     end
 
+    -- The parts of nearby pickups, for touching rather than walking onto. A
+    -- pickup is usually a model, and it is the parts inside that carry the
+    -- TouchInterest the game is listening on.
+    function Farm.itemPartsAround(radius)
+        local folder = itemsFolder()
+        local root = U.myRoot()
+        local found = {}
+        if not folder or not root then return found end
+
+        for _, item in ipairs(folder:GetChildren()) do
+            local position = Game.pivotOf(item)
+            if position and (position - root.Position).Magnitude <= radius then
+                if item:IsA("BasePart") then
+                    found[#found + 1] = item
+                else
+                    for _, part in ipairs(item:GetDescendants()) do
+                        if part:IsA("BasePart") then found[#found + 1] = part end
+                    end
+                end
+            end
+        end
+        return found
+    end
+
     KH.loop(0.5, function()
         if not S.Farm.Items then return end
         -- Never fight the rob routine or a sweep for the character.
@@ -4855,7 +5083,11 @@ do
         Travel.to(position, {direct = true, speed = 180, timeout = 8})
         local deadline = os.clock() + 1.5
         while KH.Alive and item.Parent and os.clock() < deadline do
+            -- Prompts first where they are reachable, and the touch either
+            -- way: on an executor that cannot see the game's modules, landing
+            -- on the pickup is the whole of the pickup.
             Rob.fireNearby(12)
+            for _, part in ipairs(Farm.itemPartsAround(14)) do Rob.touch(part) end
             task.wait(0.15)
         end
 
@@ -4871,6 +5103,132 @@ do
     KH.loop(0.2, function()
         if not S.Farm.InteractAura then return end
         Rob.fireNearby(math.max(S.Farm.AuraRange, 1))
+    end)
+
+    -- ---------------------------------------------------------- manual farm
+    -- No travel, no teleports, no collision changes. The player drives and
+    -- parks; this holds the interact key so the game's own hold-to-rob circle
+    -- fills, and touches the loot within arm's reach. Every part of it is
+    -- something a player does by hand, which is exactly why it survives on
+    -- executors where the rest does not.
+    local VirtualInput
+    pcall(function() VirtualInput = game:GetService("VirtualInputManager") end)
+
+    Farm.InputOK = VirtualInput and "ready" or "no VirtualInputManager"
+
+    local holdingKey, holdUntil = nil, 0
+
+    local function sendKey(down, key)
+        if not VirtualInput then return false end
+        return (pcall(function() VirtualInput:SendKeyEvent(down, key, false, game) end))
+    end
+
+    local function releaseInteract()
+        if holdingKey then
+            sendKey(false, holdingKey)
+            holdingKey = nil
+        end
+    end
+
+    -- Held down rather than tapped: a key tapped over and over restarts
+    -- Jailbreak's hold-to-interact circle from zero every time and never
+    -- completes it. Let go and pressed again every few seconds all the same,
+    -- because the player's own press of that key ends our virtual one and
+    -- nothing tells us it happened.
+    local function holdInteract()
+        if not VirtualInput then return end
+        local key = U.keyCode(S.Farm.InteractKey)
+        if not key then
+            releaseInteract()
+            Farm.InputOK = "no such key"
+            return
+        end
+
+        if holdingKey == key then
+            -- One tick of gap before the next press, so the game sees a real
+            -- release rather than two downs in a row.
+            if os.clock() >= holdUntil then releaseInteract() end
+            return
+        end
+
+        releaseInteract()
+        if sendKey(true, key) then
+            holdingKey, holdUntil = key, os.clock() + 3
+            Farm.InputOK = "holding " .. tostring(S.Farm.InteractKey)
+        else
+            Farm.InputOK = "blocked by the executor"
+        end
+    end
+
+    -- A key left down after an unload would be stuck down for the rest of the
+    -- session, so this has to run whatever else happened.
+    KH.undo(releaseInteract)
+
+    function Farm.grabNearby()
+        local root = U.myRoot()
+        if not root or not KH.X.firetouch then return 0 end
+
+        local radius = math.max(S.Farm.GrabRadius, 1)
+        local count = 0
+        for _, part in ipairs(Game.lootAround(root.Position, radius)) do
+            Rob.touch(part)
+            count = count + 1
+        end
+        for _, part in ipairs(Farm.itemPartsAround(radius)) do
+            Rob.touch(part)
+            count = count + 1
+        end
+        return count
+    end
+
+    function Farm.setManual(on)
+        S.Farm.Manual = on and true or false
+        if not S.Farm.Manual then
+            releaseInteract()
+            Farm.Status = "Off"
+        end
+        UI.refreshKeybinds()
+    end
+
+    KH.loop(0.25, function()
+        if not S.Farm.Manual then return end
+
+        -- The auto routines drive the character; letting the manual farm hold
+        -- a key down through one of those is how you buy a car mid-robbery.
+        if Rob.Busy or Police.Busy or Travel.Busy then
+            releaseInteract()
+            Farm.Status = "Paused — something else is driving"
+            return
+        end
+        if U.typing() then
+            releaseInteract()
+            Farm.Status = "Paused — typing"
+            return
+        end
+        if not U.myRoot() then
+            releaseInteract()
+            Farm.Status = "Waiting for a character"
+            return
+        end
+
+        if S.Farm.HoldInteract then holdInteract() else releaseInteract() end
+
+        local grabbed = 0
+        if S.Farm.GrabLoot then
+            grabbed = Farm.grabNearby()
+            Farm.Grabbed = Farm.Grabbed + grabbed
+        end
+        -- Free where the modules are reachable, a no-op where they are not.
+        Rob.fireNearby(math.max(S.Farm.GrabRadius, 1))
+
+        local have, cap = Game.bag()
+        if have and cap then
+            Farm.Status = ("Working — bag %d/%d"):format(have, cap)
+        elseif grabbed > 0 then
+            Farm.Status = ("Working — %d nearby"):format(grabbed)
+        else
+            Farm.Status = "Working — nothing in reach"
+        end
     end)
 
     -- -------------------------------------------------------------- anti-afk
@@ -5388,6 +5746,34 @@ do
     do
         local tab = UI.addTab("Farm")
 
+        local manual = UI.section(tab, "Manual Farm")
+        UI.label(manual, "Farms wherever you already are. It never moves your character, so nothing it does can be rejected as a teleport — you drive to a robbery, park in it, and this works the room. The only farm that still does anything on an executor that cannot reach the game's modules.")
+        UI.toggle(manual, opt("Farm", "Manual", {
+            text = "Manual Farm",
+            desc = "Hold the interact key and grab what is in reach, and nothing else.",
+            onSet = function(on) Farm.setManual(on) end,
+        }))
+        UI.keybind(manual, opt("Farm", "ManualKey", {text = "Manual Farm Key"}))
+        UI.toggle(manual, opt("Farm", "HoldInteract", {
+            text = "Hold Interact",
+            desc = "Holds the game's own key down so the rob circle fills by itself.",
+        }))
+        UI.keybind(manual, opt("Farm", "InteractKey", {text = "Interact Key"}))
+        UI.toggle(manual, opt("Farm", "GrabLoot", {
+            text = "Grab What Is In Reach",
+            desc = "Touch loot and dropped pickups near you without walking onto them.",
+        }))
+        UI.slider(manual, opt("Farm", "GrabRadius", {
+            text = "Reach", min = 5, max = 100, step = 1, suffix = " studs",
+        }))
+        UI.readout(manual, {text = "Status", get = function() return Farm.Status end})
+        UI.readout(manual, {text = "Grabbed", get = function() return Farm.Grabbed end})
+        UI.readout(manual, {text = "Interact Key", get = function() return Farm.InputOK end})
+        UI.readout(manual, {
+            text = "Touch",
+            get = function() return KH.X.firetouch and "available" or "unavailable" end,
+        })
+
         local pickups = UI.section(tab, "Pickups")
         UI.toggle(pickups, opt("Farm", "Items", {
             text = "Collect Dropped Items",
@@ -5407,7 +5793,6 @@ do
             text = "Aura Range", min = 5, max = 80, step = 1, suffix = " studs",
         }))
 
-        hide(pickups)
         hide(aura)
 
         local session = UI.section(tab, "Session")
@@ -5576,6 +5961,9 @@ do
         UI.toggle(speed, opt("Move", "Bhop", {text = "Bunny Hop"}))
 
         local clip = UI.section(tab, "Noclip & Fly")
+        if not usable then
+            UI.label(clip, "Noclip switches your collisions off, and it does that here — but Jailbreak's client watches for movement it did not authorise and puts you back. Switching that check off needs getgc, and this executor does not have it, so expect walls to hold. Everything else on this tab is plain client physics and works regardless.")
+        end
         UI.toggle(clip, opt("Move", "Noclip", {
             text = "Noclip",
             onSet = function(on) Move.setNoclip(on) end,
@@ -5591,7 +5979,13 @@ do
             text = "Fly Speed", min = 20, max = 400, step = 5,
         }))
         UI.toggle(clip, opt("Move", "Spinbot", {text = "Spinbot"}))
-        hide(tab)
+
+        local landing = UI.section(tab, "Falling")
+        UI.label(landing, "Roblox has no fall damage of its own — Jailbreak adds it, and reads it off how fast you arrive. Flight is safe until it stops, which is why switching it off in the air is what kills you.")
+        UI.toggle(landing, opt("Move", "SafeLand", {
+            text = "Safe Landing",
+            desc = "Fly the character down instead of dropping it, and slow any long fall before it lands.",
+        }))
     end
 
     -- ========================================================= VISUALS TAB
@@ -5847,6 +6241,7 @@ do
     local Rob              = KH.Rob
     local Police           = KH.Police
     local Move             = KH.Move
+    local Farm             = KH.Farm
     local Config           = KH.Config
     local UserInputService = KH.Services.UserInputService
 
@@ -5856,6 +6251,9 @@ do
     UI.registerKeybind("Fly", function() return S.Move.FlyKey end, function() return S.Move.Fly end)
     UI.registerKeybind("Arrest All", function() return S.Police.ArrestKey end, function()
         return Police.Busy
+    end)
+    UI.registerKeybind("Manual Farm", function() return S.Farm.ManualKey end, function()
+        return S.Farm.Manual
     end)
     UI.refreshKeybinds()
 
@@ -5876,6 +6274,11 @@ do
         end
         if key == U.keyCode(S.Move.FlyKey) then
             Move.setFly(not S.Move.Fly)
+            UI.refreshAll()
+            return
+        end
+        if key == U.keyCode(S.Farm.ManualKey) then
+            Farm.setManual(not S.Farm.Manual)
             UI.refreshAll()
             return
         end
@@ -5992,8 +6395,8 @@ do
     end
 
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
-    print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all")
-        :format(S.UI.MenuKey, S.Move.NoclipKey, S.Move.FlyKey, S.Police.ArrestKey))
+    print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all · [%s] manual farm")
+        :format(S.UI.MenuKey, S.Move.NoclipKey, S.Move.FlyKey, S.Police.ArrestKey, S.Farm.ManualKey))
 
     -- One line saying what this executor exposes. Every Jailbreak failure looks
     -- the same from the outside, and this is what tells them apart.

@@ -417,6 +417,10 @@ do
         UI.toggle(clip, opt("Move", "Spinbot", {
             text = "Spinbot", desc = "Constantly rotate your character.",
         }))
+        UI.toggle(clip, opt("Move", "SafeLand", {
+            text = "Safe Landing",
+            desc = "Fly down instead of dropping when fly is switched off in the air, and slow any long fall before it lands.",
+        }))
 
         local teleport = UI.section(tab, "Teleport")
         UI.button(teleport, {text = "To Murderer", callback = function() Move.tpMurderer() end})

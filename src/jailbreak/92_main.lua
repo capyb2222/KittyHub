@@ -11,6 +11,7 @@ do
     local Rob              = KH.Rob
     local Police           = KH.Police
     local Move             = KH.Move
+    local Farm             = KH.Farm
     local Config           = KH.Config
     local UserInputService = KH.Services.UserInputService
 
@@ -20,6 +21,9 @@ do
     UI.registerKeybind("Fly", function() return S.Move.FlyKey end, function() return S.Move.Fly end)
     UI.registerKeybind("Arrest All", function() return S.Police.ArrestKey end, function()
         return Police.Busy
+    end)
+    UI.registerKeybind("Manual Farm", function() return S.Farm.ManualKey end, function()
+        return S.Farm.Manual
     end)
     UI.refreshKeybinds()
 
@@ -40,6 +44,11 @@ do
         end
         if key == U.keyCode(S.Move.FlyKey) then
             Move.setFly(not S.Move.Fly)
+            UI.refreshAll()
+            return
+        end
+        if key == U.keyCode(S.Farm.ManualKey) then
+            Farm.setManual(not S.Farm.Manual)
             UI.refreshAll()
             return
         end
@@ -156,8 +165,8 @@ do
     end
 
     print(("[Kitty Hub] v%s loaded — executor: %s"):format(KH.Version, KH.X.name))
-    print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all")
-        :format(S.UI.MenuKey, S.Move.NoclipKey, S.Move.FlyKey, S.Police.ArrestKey))
+    print(("[Kitty Hub] [%s] menu · [%s] noclip · [%s] fly · [%s] arrest all · [%s] manual farm")
+        :format(S.UI.MenuKey, S.Move.NoclipKey, S.Move.FlyKey, S.Police.ArrestKey, S.Farm.ManualKey))
 
     -- One line saying what this executor exposes. Every Jailbreak failure looks
     -- the same from the outside, and this is what tells them apart.

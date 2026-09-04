@@ -901,6 +901,35 @@ do
         return false
     end
 
+    -- Everything loot-shaped within reach of a point, nearest first. The
+    -- robbery-scoped version below searches a robbery's own model; this one is
+    -- for the manual farm, which has no robbery to scope to — it is whatever
+    -- happens to be around the character, so the radius is kept small.
+    function Game.lootAround(position, radius)
+        local found = {}
+        if typeof(position) ~= "Vector3" then return found end
+
+        local params = OverlapParams.new()
+        params.MaxParts = 500
+        local ok, parts = pcall(function()
+            return workspace:GetPartBoundsInRadius(position, math.min(radius or 30, 100), params)
+        end)
+        if not ok or typeof(parts) ~= "table" then return found end
+
+        local mine = LocalPlayer.Character
+        for _, part in ipairs(parts) do
+            if part:IsA("BasePart") and looksLikeLoot(part)
+                and not (mine and part:IsDescendantOf(mine)) then
+                found[#found + 1] = part
+            end
+        end
+
+        table.sort(found, function(a, b)
+            return (a.Position - position).Magnitude < (b.Position - position).Magnitude
+        end)
+        return found
+    end
+
     -- What is worth standing on inside one robbery, nearest to its centre
     -- first. Searching the robbery's own model rather than a sphere of world is
     -- the difference between a vault's money piles and every crate in the city.
