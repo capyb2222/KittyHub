@@ -1,0 +1,241 @@
+-- ============================================================================
+--  ROBBERY — auto rob, and the pieces it is built from
+--
+--  Interiors are not hardcoded. Jailbreak offers everything you can interact
+--  with through CircleAction, and the loot itself is parts you stand on, so a
+--  job is: fly to the entrance, fire the prompts around you, hop between the
+--  loot, and run the bag to a base. That survives a map update; a path of
+--  waypoints through a vault does not.
+-- ============================================================================
+
+local Rob = {}
+KH.Rob = Rob
+
+do
+    local UI     = KH.UI
+    local U      = KH.U
+    local S      = KH.S
+    local Game   = KH.Game
+    local Travel = KH.Travel
+
+    Rob.Status  = "Idle"
+    Rob.Current = nil
+    Rob.Busy    = false
+    Rob.Abort   = false
+    Rob.Runs    = 0
+
+    local function say(text, kind)
+        Rob.Status = text
+        if S.Rob.Notify then
+            UI.notify({title = "Auto Rob", text = text, kind = kind, duration = 4})
+        end
+    end
+
+    -- ---------------------------------------------------------- interaction
+    -- Jailbreak's hold-to-interact timer lives on the spec being held, so
+    -- zeroing it every frame completes any prompt the moment it is started.
+    KH.onFrame("jb-instant", function()
+        if not S.Rob.Instant then return end
+        local circle = Game.circleAction()
+        local spec = circle and circle.Spec
+        if typeof(spec) == "table" then spec.PressedAt = 0 end
+    end, 40)
+
+    -- Firing the same prompt every tick would be a packet flood; once every
+    -- half second per prompt is enough for anything that yields loot.
+    local fired = setmetatable({}, {__mode = "k"})
+
+    function Rob.fireNearby(range)
+        local specs = Game.specs()
+        if not specs then return 0 end
+        local root = U.myRoot()
+        if not root then return 0 end
+
+        -- Snapshot first: a callback can add or remove specs, and iterating a
+        -- table while it is being rewritten is undefined.
+        local list = {}
+        for _, spec in pairs(specs) do list[#list + 1] = spec end
+
+        local now, count = os.clock(), 0
+        for _, spec in ipairs(list) do
+            if Game.specIsSafe(spec) and (fired[spec] or 0) < now then
+                local position = Game.specPosition(spec)
+                if position and (position - root.Position).Magnitude <= range then
+                    fired[spec] = now + 0.5
+                    if Game.fireSpec(spec) then count = count + 1 end
+                end
+            end
+        end
+        return count
+    end
+
+    -- ---------------------------------------------------------------- rules
+    local function alive()
+        return KH.Alive and not Rob.Abort and U.myRoot() ~= nil
+    end
+
+    local function working(entry, deadline)
+        if not alive() then return false end
+        if os.clock() > deadline then return false end
+        if Game.isCuffed(KH.LocalPlayer) then return false end
+        -- Closed means the job is over; whatever is in the bag gets banked.
+        return Game.isRobbable(entry)
+    end
+
+    -- ----------------------------------------------------------------- loot
+    -- Stand on each loot part in turn. Money in Jailbreak accrues while you
+    -- are on it, so the dwell matters more than the number of stops.
+    local function lootSweep(entry, deadline)
+        local centre = Game.centrePoint(entry)
+        if not centre then return end
+
+        local parts = Game.lootNear(centre, S.Rob.LootRadius)
+        for _, part in ipairs(parts) do
+            if not working(entry, deadline) or Game.bagFull() then return end
+            if part.Parent then
+                Travel.to(part.Position, {direct = true, speed = 150, timeout = 6})
+                local until_ = os.clock() + 1.5
+                while os.clock() < until_ and working(entry, deadline) do
+                    if S.Rob.AutoInteract then Rob.fireNearby(S.Rob.InteractRange) end
+                    if Game.bagFull() then return end
+                    task.wait(0.15)
+                end
+            end
+        end
+    end
+
+    -- -------------------------------------------------------------- deposit
+    function Rob.deposit()
+        if not Game.carrying() then return true end
+        local base = Game.nearestBase()
+        if not base then return false end
+
+        Rob.Status = "Banking at " .. base.name
+        Travel.to(base.position)
+
+        local deadline = os.clock() + 30
+        while KH.Alive and not Rob.Abort and Game.carrying() and os.clock() < deadline do
+            Rob.fireNearby(S.Rob.InteractRange)
+            task.wait(0.25)
+        end
+        return not Game.carrying()
+    end
+
+    -- ------------------------------------------------------------- one job
+    function Rob.runOne(entry)
+        if Rob.Busy then return false end
+        if not entry then return false end
+
+        Rob.Busy, Rob.Abort, Rob.Current = true, false, entry.name
+        local ok = pcall(function()
+            local point = Game.entryPoint(entry)
+            if not point then
+                say(entry.name .. " could not be located.", "warn")
+                return
+            end
+
+            Rob.Status = "Flying to " .. entry.name
+            if not Travel.to(point) then
+                say("Could not reach " .. entry.name .. ".", "warn")
+                return
+            end
+
+            Rob.Status = "Robbing " .. entry.name
+            local deadline = os.clock() + math.max(S.Rob.Dwell, 10)
+
+            -- One pass of prompts on arrival opens whatever needs opening,
+            -- then alternate sweeping the loot with firing what is in reach.
+            while working(entry, deadline) and not Game.bagFull() do
+                if S.Rob.AutoInteract then Rob.fireNearby(S.Rob.InteractRange) end
+                if S.Rob.Loot then
+                    lootSweep(entry, deadline)
+                else
+                    task.wait(0.25)
+                end
+                task.wait(0.2)
+            end
+
+            Rob.Runs = Rob.Runs + 1
+            if S.Rob.Deposit then Rob.deposit() end
+            say(("Finished %s."):format(entry.name), "good")
+        end)
+
+        Rob.Busy, Rob.Current = false, nil
+        Rob.Status = "Idle"
+        return ok
+    end
+
+    function Rob.stop()
+        Rob.Abort = true
+        Travel.stop()
+        Rob.Status = "Stopping"
+    end
+
+    -- --------------------------------------------------------------- choice
+    local function allowed(entry)
+        if S.Rob.Only == "Quick" then return entry.quick end
+        if S.Rob.Only == "Big" then return not entry.quick end
+        return true
+    end
+
+    function Rob.candidates()
+        local out = {}
+        for _, entry in ipairs(Game.openRobberies()) do
+            if allowed(entry) and Game.entryPoint(entry) then out[#out + 1] = entry end
+        end
+
+        if S.Rob.Pick == "Best Payout" then
+            table.sort(out, function(a, b) return a.payout > b.payout end)
+        elseif S.Rob.Pick == "Nearest" then
+            local root = U.myRoot()
+            local origin = root and root.Position or Vector3.zero
+            local distance = {}
+            for _, entry in ipairs(out) do
+                local point = Game.entryPoint(entry)
+                distance[entry] = point and (point - origin).Magnitude or math.huge
+            end
+            table.sort(out, function(a, b) return distance[a] < distance[b] end)
+        end
+        return out
+    end
+
+    -- ------------------------------------------------------------ auto loop
+    KH.loop(1, function()
+        if not S.Rob.Auto or Rob.Busy then return end
+        -- Police loads after this one, so it is looked up when the loop runs.
+        local police = KH.Police
+        if police and police.Busy then return end
+
+        if not Game.isCriminal() then
+            Rob.Status = "Waiting — not on the Criminal team"
+            return
+        end
+        if Game.isCuffed(KH.LocalPlayer) then
+            Rob.Status = "Waiting — arrested"
+            return
+        end
+
+        -- Carrying something from a job that was cut short? Bank it first.
+        if Game.carrying() and S.Rob.Deposit then
+            Rob.Busy = true
+            pcall(Rob.deposit)
+            Rob.Busy = false
+            return
+        end
+
+        local next_ = Rob.candidates()[1]
+        if not next_ then
+            if S.Rob.Restock then
+                Rob.Status = "Waiting for a robbery to open"
+            else
+                S.Rob.Auto = false
+                UI.refreshAll()
+                say("Nothing left open — stopping.", "warn")
+            end
+            return
+        end
+
+        Rob.runOne(next_)
+        task.wait(math.max(S.Rob.Wait, 0))
+    end)
+end

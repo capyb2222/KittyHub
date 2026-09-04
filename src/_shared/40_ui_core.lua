@@ -262,7 +262,7 @@ do
     UI.corner(badge, 6)
     UI.accented(badge, "BackgroundColor3")
     local badgeText = make("TextLabel", {
-        Text = "MM2",
+        Text = KH.GameTag or "HUB",
         Font = Enum.Font.GothamBold,
         TextSize = 11,
         TextColor3 = C.Accent,

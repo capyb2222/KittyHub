@@ -47,8 +47,8 @@ do
     function U.myRoot() return U.rootOf(LocalPlayer) end
     function U.myHum()  return U.humOf(LocalPlayer) end
 
-    -- MM2 characters are R15, so the torso part name differs from R6. Aim and
-    -- prediction both want the mass centre rather than the head.
+    -- R15 names the torso differently from R6. Aim and prediction both want
+    -- the mass centre rather than the head.
     function U.torsoOf(char)
         return char:FindFirstChild("HumanoidRootPart")
             or char:FindFirstChild("UpperTorso")

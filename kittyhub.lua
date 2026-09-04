@@ -12,7 +12,8 @@ local HOSTS = {
 }
 
 local MODULES = {
-    [142823291] = "mm2", -- Murder Mystery 2
+    [142823291] = "mm2",       -- Murder Mystery 2
+    [606849621] = "jailbreak", -- Jailbreak
 }
 local FALLBACK = "generic"
 

@@ -30,14 +30,15 @@ RESET, DIM, GREEN, YELLOW, RED, CYAN = (
 
 
 def stale_module(name: str) -> bool:
-    """True when src/<name>/ has changed since <name>.lua was last built."""
+    """True when src/<name>/ or src/_shared/ changed since <name>.lua was built."""
     module_dir = SRC / name
     built = ROOT / f"{name}.lua"
     if not module_dir.is_dir():
         return False
     if not built.exists():
         return True
-    newest = max((p.stat().st_mtime for p in module_dir.glob("*.lua")), default=0)
+    sources = list(module_dir.glob("*.lua")) + list((SRC / "_shared").glob("*.lua"))
+    newest = max((p.stat().st_mtime for p in sources), default=0)
     return newest > built.stat().st_mtime
 
 

@@ -21,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
+SHARED = "_shared"
 
 BANNER = """\
 -- ============================================================================
@@ -44,6 +45,7 @@ BANNER = """\
 
 TITLES = {
     "mm2": "Murder Mystery 2 Script",
+    "jailbreak": "Jailbreak Script",
     "generic": "Universal fallback module",
 }
 
@@ -58,18 +60,33 @@ def version_of(files: list[Path]) -> str:
     return "0.0.0"
 
 
-def build_module(name: str) -> Path:
+def sources_for(name: str) -> list[Path]:
+    """Shared sources plus the module own ones, ordered by numeric prefix.
+
+    The two directories interleave: a game defaults file has to land before
+    the shared config store reads it, and its Game table before the shared
+    movement and visuals look for one.
+    """
     module_dir = SRC / name
-    files = sorted(module_dir.glob("*.lua"))
+    if not module_dir.is_dir():
+        raise SystemExit(f"no such module directory: {module_dir}")
+    files = list(module_dir.glob("*.lua")) + list((SRC / SHARED).glob("*.lua"))
+    files.sort(key=lambda p: p.name)
+    return files
+
+
+def build_module(name: str) -> Path:
+    files = sources_for(name)
     if not files:
-        raise SystemExit(f"no .lua sources in {module_dir}")
+        raise SystemExit(f"no .lua sources for module {name}")
 
     body_parts: list[str] = []
     for path in files:
         text = path.read_text(encoding="utf-8").rstrip()
+        label = f"{path.parent.name}/{path.name}"
         body_parts.append(
-            f"-- ─── src/{name}/{path.name} "
-            + "─" * max(0, 58 - len(path.name))
+            f"-- ─── src/{label} "
+            + "─" * max(0, 58 - len(label))
             + f"\n\n{text}\n"
         )
     body = "\n".join(body_parts)
@@ -97,7 +114,9 @@ def main() -> int:
     if not SRC.is_dir():
         raise SystemExit("no src/ directory next to build.py")
 
-    modules = args or sorted(p.name for p in SRC.iterdir() if p.is_dir())
+    modules = args or sorted(
+        p.name for p in SRC.iterdir() if p.is_dir() and p.name != SHARED
+    )
     print(f"building {len(modules)} module(s):")
 
     outputs = [build_module(name) for name in modules]

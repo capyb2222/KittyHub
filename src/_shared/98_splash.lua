@@ -118,7 +118,7 @@ do
         end
 
         fading(make("TextLabel", {
-            Text = "Murder Mystery 2",
+            Text = KH.GameName or "Roblox",
             Font = Enum.Font.Gotham,
             TextSize = 12,
             TextColor3 = C.TextDim,

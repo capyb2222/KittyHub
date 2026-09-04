@@ -8,7 +8,7 @@
 do
     local S        = KH.S
     local Lighting = KH.Services.Lighting
-    local Game     = KH.Game
+    local Game     = KH.Game or {}
     local Players  = KH.Services.Players
 
     local Visual = {}
@@ -115,7 +115,7 @@ do
     end
 
     local function applyXray()
-        local map = Game.map()
+        local map = Game.map and Game.map() or workspace
         if not map then return end
         for _, part in ipairs(map:GetDescendants()) do
             if part:IsA("BasePart") and part.Transparency < 0.9 and not isProtected(part) then
@@ -139,13 +139,15 @@ do
     KH.undo(clearXray)
 
     -- A new round means a new map model, so re-run rather than tracking parts.
-    Game.on("RoundStart", function()
-        if S.Visual.Xray then
-            task.wait(1)
-            xraySaved = {}
-            applyXray()
-        end
-    end)
+    if Game.on then
+        Game.on("RoundStart", function()
+            if S.Visual.Xray then
+                task.wait(1)
+                xraySaved = {}
+                applyXray()
+            end
+        end)
+    end
 
     KH.loop(1, function()
         -- Also when the slider has moved: the walls are already painted, so

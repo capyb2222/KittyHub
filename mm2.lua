@@ -8,14 +8,14 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Murder Mystery 2 Script
---   build 3.0.0+2f7f684f  ·  2026-09-03 01:39 UTC
+--   build 3.1.0+abe9fc53  ·  2026-09-04 01:08 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/mm2/ ; rebuild with `python build.py`.
 --
 -- ============================================================================
 
--- ─── src/mm2/01_prelude.lua ────────────────────────────────────────────
+-- ─── src/_shared/00_prelude.lua ────────────────────────────────────
 
 -- ============================================================================
 --  PRELUDE — services, shared namespace, lifecycle helpers
@@ -48,7 +48,7 @@ end
 -- file-level locals: the build concatenates every source into a single chunk,
 -- and a chunk's main body is capped at 200 active locals.
 local KH = {
-    Version = "3.0.0",
+    Version = "3.1.0",
     Conn    = {}, -- RBXScriptConnections   -> disconnected on unload
     Inst    = {}, -- Instances we created   -> destroyed on unload
     Thread  = {}, -- task threads           -> cancelled on unload
@@ -171,17 +171,16 @@ function KH.camera()
     return Camera
 end
 
--- ─── src/mm2/02_config.lua ─────────────────────────────────────────────
+-- ─── src/mm2/10_defaults.lua ───────────────────────────────────────
 
 -- ============================================================================
---  CONFIG — defaults, deep-merge, and on-disk profiles
+--  DEFAULTS — the MM2 settings schema
 -- ============================================================================
 
-local S -- the settings table every other module reads
+KH.GameTag  = "MM2"
+KH.GameName = "Murder Mystery 2"
 
 do
-    local HttpService = KH.Services.HttpService
-    local X = KH.X
 
     -- Defaults double as the schema: a saved profile is backfilled from here
     -- and keys that no longer exist are dropped, so upgrades never half-migrate.
@@ -304,6 +303,20 @@ do
         },
     }
     KH.Defaults = DEFAULTS
+end
+
+-- ─── src/_shared/20_config.lua ─────────────────────────────────────
+
+-- ============================================================================
+--  CONFIG — deep-merge over the game's defaults, and on-disk profiles
+-- ============================================================================
+
+local S -- the settings table every other module reads
+
+do
+    local HttpService = KH.Services.HttpService
+    local X = KH.X
+    local DEFAULTS = KH.Defaults
 
     -- ------------------------------------------------------------ deep merge
     local function deepCopy(t)
@@ -454,7 +467,7 @@ do
     end
 end
 
--- ─── src/mm2/03_util.lua ───────────────────────────────────────────────
+-- ─── src/_shared/30_util.lua ───────────────────────────────────────
 
 -- ============================================================================
 --  UTIL — small helpers shared by every feature module
@@ -505,8 +518,8 @@ do
     function U.myRoot() return U.rootOf(LocalPlayer) end
     function U.myHum()  return U.humOf(LocalPlayer) end
 
-    -- MM2 characters are R15, so the torso part name differs from R6. Aim and
-    -- prediction both want the mass centre rather than the head.
+    -- R15 names the torso differently from R6. Aim and prediction both want
+    -- the mass centre rather than the head.
     function U.torsoOf(char)
         return char:FindFirstChild("HumanoidRootPart")
             or char:FindFirstChild("UpperTorso")
@@ -630,7 +643,7 @@ do
     end
 end
 
--- ─── src/mm2/04_game.lua ───────────────────────────────────────────────
+-- ─── src/mm2/35_game.lua ───────────────────────────────────────────
 
 -- ============================================================================
 --  GAME — everything that knows what Murder Mystery 2 actually looks like
@@ -1346,7 +1359,7 @@ do
     end
 end
 
--- ─── src/mm2/05_ui_core.lua ────────────────────────────────────────────
+-- ─── src/_shared/40_ui_core.lua ────────────────────────────────────
 
 -- ============================================================================
 --  UI CORE — window shell, tabs, notifications, watermark, theming
@@ -1612,7 +1625,7 @@ do
     UI.corner(badge, 6)
     UI.accented(badge, "BackgroundColor3")
     local badgeText = make("TextLabel", {
-        Text = "MM2",
+        Text = KH.GameTag or "HUB",
         Font = Enum.Font.GothamBold,
         TextSize = 11,
         TextColor3 = C.Accent,
@@ -2237,7 +2250,7 @@ do
     UI.Capturing = false
 end
 
--- ─── src/mm2/06_ui_controls.lua ────────────────────────────────────────
+-- ─── src/_shared/50_ui_controls.lua ────────────────────────────────
 
 -- ============================================================================
 --  UI CONTROLS — toggle, slider, dropdown, keybind, button, input, colour
@@ -3008,7 +3021,647 @@ do
     end
 end
 
--- ─── src/mm2/07_esp.lua ────────────────────────────────────────────────
+-- ─── src/_shared/55_session.lua ────────────────────────────────────
+
+-- ============================================================================
+--  SESSION — the one render loop, rejoin, server hop, and unload
+-- ============================================================================
+
+do
+    local UI              = KH.UI
+    local RunService      = KH.Services.RunService
+    local TeleportService = KH.Services.TeleportService
+    local HttpService     = KH.Services.HttpService
+    local LocalPlayer     = KH.LocalPlayer
+
+    -- ============================================================ RENDER LOOP
+    -- One connection drives every per-frame job. Each is pcall-wrapped, so a
+    -- feature that breaks cannot take the rest of the menu down with it.
+    KH.track(RunService.RenderStepped:Connect(function(delta)
+        if not KH.Alive then return end
+        KH.camera()
+        local jobs = KH.Frame
+        for i = 1, #jobs do
+            local job = jobs[i]
+            KH.safe(job.name, job.fn, delta)
+        end
+    end))
+
+
+    -- ============================================================== SESSION
+    function KH.rejoin()
+        UI.notify({title = "Rejoin", text = "Teleporting…"})
+        pcall(function()
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end)
+    end
+
+    function KH.serverHop()
+        KH.detach(function()
+            UI.notify({title = "Server Hop", text = "Looking for a server…"})
+            local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100")
+                :format(game.PlaceId)
+
+            local ok, body = pcall(function() return game:HttpGet(url) end)
+            if not ok then
+                UI.notify({title = "Server Hop", text = "Could not reach the server list.", kind = "bad"})
+                return
+            end
+
+            local decoded, data = pcall(function() return HttpService:JSONDecode(body) end)
+            if not decoded or typeof(data) ~= "table" or typeof(data.data) ~= "table" then
+                UI.notify({title = "Server Hop", text = "Server list was unreadable.", kind = "bad"})
+                return
+            end
+
+            local candidates = {}
+            for _, server in ipairs(data.data) do
+                if typeof(server) == "table"
+                    and server.id ~= game.JobId
+                    and typeof(server.playing) == "number"
+                    and typeof(server.maxPlayers) == "number"
+                    and server.playing < server.maxPlayers then
+                    candidates[#candidates + 1] = server.id
+                end
+            end
+
+            if #candidates == 0 then
+                UI.notify({title = "Server Hop", text = "No other servers with room.", kind = "warn"})
+                return
+            end
+
+            local pick = candidates[math.random(1, #candidates)]
+            pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, pick, LocalPlayer)
+            end)
+        end)
+    end
+
+    -- =============================================================== UNLOAD
+    function KH.unload()
+        if not KH.Alive then return end
+        KH.Alive = false
+
+        -- Undo world changes first, while our instances still exist.
+        for _, restore in ipairs(KH.Undo) do pcall(restore) end
+        for _, conn in ipairs(KH.Conn) do pcall(function() conn:Disconnect() end) end
+
+        local current = coroutine.running()
+        for _, thread in ipairs(KH.Thread) do
+            if thread ~= current then pcall(task.cancel, thread) end
+        end
+
+        for _, inst in ipairs(KH.Inst) do pcall(function() inst:Destroy() end) end
+
+        local env = (type(getgenv) == "function" and getgenv()) or _G
+        env.KittyHubCleanup = nil
+        env.KittyHub = nil
+        print("[Kitty Hub] Unloaded.")
+    end
+
+    do
+        local env = (type(getgenv) == "function" and getgenv()) or _G
+        env.KittyHubCleanup = KH.unload
+    end
+
+end
+
+-- ─── src/_shared/60_movement.lua ───────────────────────────────────
+
+-- ============================================================================
+--  MOVEMENT — speed, jump, noclip, fly, spinbot, teleports, waypoints
+--
+--  Game-agnostic: anything that needs to know what it is teleporting to
+--  lives in the game module and builds on Move.tpTo / Move.tpToPlayer.
+-- ============================================================================
+
+do
+    local UI               = KH.UI
+    local U                = KH.U
+    local S                = KH.S
+    local X                = KH.X
+    local UserInputService = KH.Services.UserInputService
+    local RunService       = KH.Services.RunService
+    local HttpService      = KH.Services.HttpService
+    local LocalPlayer      = KH.LocalPlayer
+
+    local Move = {}
+    KH.Move = Move
+
+    -- ======================================================== SPEED / JUMP
+    -- Re-applied continuously because MM2 resets WalkSpeed on respawn and when
+    -- rounds change; a one-shot assignment silently stops working.
+    function Move.applyHumanoid()
+        local hum = U.myHum()
+        if not hum then return end
+        if S.Move.SpeedEnabled and S.Move.SpeedMode == "Humanoid" then
+            if hum.WalkSpeed ~= S.Move.Speed then hum.WalkSpeed = S.Move.Speed end
+        elseif hum.WalkSpeed ~= 16 and not S.Move.SpeedEnabled then
+            hum.WalkSpeed = 16
+        end
+
+        -- R15 humanoids may be driven by JumpHeight rather than JumpPower;
+        -- writing only JumpPower would silently do nothing on those.
+        if S.Move.JumpEnabled then
+            if hum.UseJumpPower then
+                if hum.JumpPower ~= S.Move.Jump then hum.JumpPower = S.Move.Jump end
+            else
+                local height = S.Move.Jump / 7.5
+                if math.abs(hum.JumpHeight - height) > 0.01 then hum.JumpHeight = height end
+            end
+        else
+            if hum.UseJumpPower then
+                if hum.JumpPower ~= 50 then hum.JumpPower = 50 end
+            elseif math.abs(hum.JumpHeight - 7.2) > 0.01 then
+                hum.JumpHeight = 7.2
+            end
+        end
+    end
+
+    -- CFrame mode drives the character directly, which ignores any server-side
+    -- WalkSpeed clamp — at the cost of looking less natural.
+    KH.onFrame("speed-cframe", function(delta)
+        if not (S.Move.SpeedEnabled and S.Move.SpeedMode == "CFrame") then return end
+        if S.Move.Fly then return end
+        local hum, root = U.myHum(), U.myRoot()
+        if not hum or not root then return end
+        local direction = hum.MoveDirection
+        if direction.Magnitude < 0.05 then return end
+        -- delta comes from the shared render loop; never yield in here.
+        root.CFrame = root.CFrame + direction * (S.Move.Speed - 16) * (delta or 0)
+    end, 60)
+
+    KH.loop(0.4, function() Move.applyHumanoid() end)
+
+    -- ============================================================== NOCLIP
+    -- Original collision states are recorded so disabling noclip restores the
+    -- character exactly, rather than blanket-setting everything collidable.
+    local noclipOriginal = {}
+    local noclipConn
+
+    local function noclipStep()
+        local char = U.charOf(LocalPlayer)
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                if noclipOriginal[part] == nil then noclipOriginal[part] = true end
+                part.CanCollide = false
+            end
+        end
+    end
+
+    function Move.setNoclip(on)
+        S.Move.Noclip = on
+        if on then
+            -- Not KH.track: this is disconnected below and on unload, and
+            -- tracking it would add a dead entry on every single toggle.
+            if not noclipConn then
+                noclipConn = RunService.Stepped:Connect(noclipStep)
+            end
+        else
+            if noclipConn then
+                noclipConn:Disconnect()
+                noclipConn = nil
+            end
+            for part, wasCollidable in pairs(noclipOriginal) do
+                if part.Parent and wasCollidable then
+                    pcall(function() part.CanCollide = true end)
+                end
+            end
+            noclipOriginal = {}
+        end
+        UI.refreshKeybinds()
+    end
+    KH.undo(function() Move.setNoclip(false) end)
+
+    -- ================================================== INFINITE JUMP / BHOP
+    KH.track(UserInputService.JumpRequest:Connect(function()
+        if not S.Move.InfJump then return end
+        local hum = U.myHum()
+        if hum then pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end) end
+    end))
+
+    KH.onFrame("bhop", function()
+        if not S.Move.Bhop then return end
+        if U.typing() then return end
+        if not UserInputService:IsKeyDown(Enum.KeyCode.Space) then return end
+        local hum = U.myHum()
+        if not hum then return end
+        local state = hum:GetState()
+        if state == Enum.HumanoidStateType.Running
+            or state == Enum.HumanoidStateType.Landed
+            or state == Enum.HumanoidStateType.RunningNoPhysics then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        end
+    end, 62)
+
+    -- ================================================================= FLY
+    local flyVelocity, flyGyro
+    local flying = false
+
+    local function stopFly()
+        flying = false
+        if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
+        if flyGyro then flyGyro:Destroy(); flyGyro = nil end
+        local hum = U.myHum()
+        if hum then hum.PlatformStand = false end
+    end
+
+    local function startFly()
+        local root, hum = U.myRoot(), U.myHum()
+        if not root or not hum then return false end
+        stopFly()
+
+        flyVelocity = Instance.new("BodyVelocity")
+        flyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        flyVelocity.Velocity = Vector3.zero
+        flyVelocity.Parent = root
+
+        flyGyro = Instance.new("BodyGyro")
+        flyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+        flyGyro.P = 9e4
+        flyGyro.CFrame = root.CFrame
+        flyGyro.Parent = root
+
+        hum.PlatformStand = true
+        flying = true
+        return true
+    end
+
+    function Move.setFly(on)
+        S.Move.Fly = on
+        if on then
+            if not startFly() then
+                S.Move.Fly = false
+                UI.notify({title = "Fly", text = "No character to attach to.", kind = "bad"})
+            end
+        else
+            stopFly()
+        end
+        UI.refreshKeybinds()
+    end
+    KH.undo(function() stopFly() end)
+
+    KH.onFrame("fly", function()
+        if not S.Move.Fly then
+            if flying then stopFly() end
+            return
+        end
+        if not flying or not flyVelocity or not flyVelocity.Parent then
+            if not startFly() then return end
+        end
+
+        local cam = KH.camera()
+        local direction = Vector3.zero
+        -- Hold still while typing rather than reading the chat as flight input.
+        if U.typing() then
+            flyVelocity.Velocity = Vector3.zero
+            flyGyro.CFrame = cam.CFrame
+            return
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - cam.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then direction = direction + cam.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then direction = direction + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then direction = direction - Vector3.new(0, 1, 0) end
+
+        if direction.Magnitude > 0 then direction = direction.Unit end
+        flyVelocity.Velocity = direction * S.Move.FlySpeed
+        flyGyro.CFrame = cam.CFrame
+    end, 61)
+
+    -- ============================================================= SPINBOT
+    KH.onFrame("spinbot", function()
+        if not S.Move.Spinbot then return end
+        local root = U.myRoot()
+        if not root then return end
+        root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(28), 0)
+    end, 63)
+
+    -- Respawns wipe all of this, so reapply once the new character settles.
+    KH.track(LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(0.6)
+        Move.applyHumanoid()
+        if S.Move.Noclip then Move.setNoclip(true) end
+        if S.Move.Fly then Move.setFly(true) end
+    end))
+
+    -- =========================================================== TELEPORTS
+    local function tpTo(position, label)
+        if not U.myRoot() then
+            UI.notify({title = "Teleport", text = "No character.", kind = "bad"})
+            return false
+        end
+        U.moveTo(position + Vector3.new(0, 3, 0), true)
+        if label then UI.notify({title = "Teleport", text = label, duration = 2}) end
+        return true
+    end
+    Move.tpTo = tpTo
+
+    local function tpToPlayer(player, label)
+        if not player then
+            UI.notify({title = "Teleport", text = "Nobody to teleport to.", kind = "warn"})
+            return false
+        end
+        local part = U.rootOf(player)
+        if not part then
+            UI.notify({title = "Teleport", text = player.DisplayName .. " has no character.", kind = "warn"})
+            return false
+        end
+        return tpTo(part.Position, label or ("Moved to " .. player.DisplayName))
+    end
+    Move.tpToPlayer = tpToPlayer
+
+    -- ============================================================ WAYPOINTS
+    -- Their own file, not the settings profile: the reconciler drops keys it
+    -- does not recognise, and waypoint names are never in the schema.
+    local WAYPOINT_FILE = "KittyHub/waypoints.json"
+    Move.Waypoints = {}
+
+    local function loadWaypoints()
+        if not (X.writefile and KH.Config.available) then return end
+        pcall(function()
+            if not isfile(WAYPOINT_FILE) then return end
+            local data = HttpService:JSONDecode(readfile(WAYPOINT_FILE))
+            if typeof(data) == "table" then Move.Waypoints = data end
+        end)
+    end
+
+    local function saveWaypoints()
+        if not (X.writefile and KH.Config.available) then return end
+        pcall(function()
+            writefile(WAYPOINT_FILE, HttpService:JSONEncode(Move.Waypoints))
+        end)
+    end
+    loadWaypoints()
+
+    function Move.saveWaypoint(name)
+        name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if name == "" then
+            UI.notify({title = "Waypoint", text = "Give it a name first.", kind = "warn"})
+            return false
+        end
+        local root = U.myRoot()
+        if not root then return false end
+        local p = root.Position
+        Move.Waypoints[name] = {p.X, p.Y, p.Z}
+        saveWaypoints()
+        UI.notify({title = "Waypoint", text = 'Saved "' .. name .. '".', kind = "good"})
+        return true
+    end
+
+    function Move.gotoWaypoint(name)
+        local entry = Move.Waypoints[name]
+        if not entry then
+            UI.notify({title = "Waypoint", text = "No waypoint called " .. tostring(name) .. ".", kind = "warn"})
+            return false
+        end
+        return tpTo(Vector3.new(entry[1], entry[2], entry[3]), 'Moved to "' .. name .. '".')
+    end
+
+    function Move.deleteWaypoint(name)
+        if Move.Waypoints[name] == nil then return false end
+        Move.Waypoints[name] = nil
+        saveWaypoints()
+        UI.notify({title = "Waypoint", text = 'Deleted "' .. name .. '".'})
+        return true
+    end
+
+    function Move.waypointNames()
+        local names = {}
+        for name in pairs(Move.Waypoints) do names[#names + 1] = name end
+        table.sort(names)
+        return names
+    end
+end
+
+-- ─── src/_shared/62_visuals.lua ────────────────────────────────────
+
+-- ============================================================================
+--  VISUALS — fullbright, fog, field of view, x-ray walls, detail stripping
+--
+--  Every effect here records what it changed and restores it on unload, so
+--  unloading the script leaves the game looking exactly as it did before.
+-- ============================================================================
+
+do
+    local S        = KH.S
+    local Lighting = KH.Services.Lighting
+    local Game     = KH.Game or {}
+    local Players  = KH.Services.Players
+
+    local Visual = {}
+    KH.Visual = Visual
+
+    -- ========================================================== FULLBRIGHT
+    local lightingSaved = nil
+
+    local function saveLighting()
+        if lightingSaved then return end
+        lightingSaved = {
+            Brightness      = Lighting.Brightness,
+            ClockTime       = Lighting.ClockTime,
+            Ambient         = Lighting.Ambient,
+            OutdoorAmbient  = Lighting.OutdoorAmbient,
+            GlobalShadows   = Lighting.GlobalShadows,
+            FogEnd          = Lighting.FogEnd,
+            FogStart        = Lighting.FogStart,
+            ExposureCompensation = Lighting.ExposureCompensation,
+        }
+    end
+
+    local function restoreLighting()
+        if not lightingSaved then return end
+        for property, value in pairs(lightingSaved) do
+            pcall(function() Lighting[property] = value end)
+        end
+        lightingSaved = nil
+    end
+    KH.undo(restoreLighting)
+
+    -- Atmosphere density is not a Lighting property, so it needs recording
+    -- separately or turning fog off again leaves the map permanently clear.
+    local atmosphereSaved = {}
+
+    local function restoreAtmosphere()
+        for effect, density in pairs(atmosphereSaved) do
+            if effect.Parent then pcall(function() effect.Density = density end) end
+        end
+        atmosphereSaved = {}
+    end
+    KH.undo(restoreAtmosphere)
+
+    -- Reapplied on a timer: MM2 drives its own day/night cycle per round and
+    -- will happily reset Brightness out from under us.
+    KH.loop(0.5, function()
+        if S.Visual.Fullbright then
+            saveLighting()
+            local shade = 128 * math.clamp(S.Visual.Brightness / 2, 0.25, 1.5)
+            Lighting.Brightness = S.Visual.Brightness
+            Lighting.ClockTime = 14
+            Lighting.GlobalShadows = false
+            Lighting.Ambient = Color3.fromRGB(shade, shade, shade)
+            Lighting.OutdoorAmbient = Color3.fromRGB(shade, shade, shade)
+        elseif lightingSaved and not S.Visual.NoFog and not S.Visual.LowDetail then
+            restoreLighting()
+        end
+
+        if S.Visual.NoFog then
+            saveLighting()
+            Lighting.FogEnd = 1e6
+            Lighting.FogStart = 1e6
+            for _, effect in ipairs(Lighting:GetChildren()) do
+                if effect:IsA("Atmosphere") then
+                    if atmosphereSaved[effect] == nil then
+                        atmosphereSaved[effect] = effect.Density
+                    end
+                    pcall(function() effect.Density = 0 end)
+                end
+            end
+        elseif next(atmosphereSaved) then
+            restoreAtmosphere()
+        end
+    end)
+
+    -- ================================================================= FOV
+    KH.onFrame("fov", function()
+        if not S.Visual.FovEnabled then return end
+        local cam = KH.camera()
+        if math.abs(cam.FieldOfView - S.Visual.Fov) > 0.1 then
+            cam.FieldOfView = S.Visual.Fov
+        end
+    end, 70)
+    KH.undo(function()
+        pcall(function() KH.camera().FieldOfView = 70 end)
+    end)
+
+    -- =============================================================== X-RAY
+    -- Only the map. Characters, coins and the dropped gun keep their real
+    -- transparency, or x-ray would hide what you turned it on to see.
+    local xraySaved = {}
+    local xrayOn = false
+    local xrayValue = nil   -- the transparency actually painted on
+
+    local function isProtected(part)
+        -- Anything belonging to a character.
+        local model = part:FindFirstAncestorOfClass("Model")
+        while model do
+            if Players:GetPlayerFromCharacter(model) then return true end
+            model = model:FindFirstAncestorOfClass("Model")
+        end
+        local name = part.Name
+        return name == "GunDrop" or name == "MainCoin" or name == "Trap"
+    end
+
+    local function applyXray()
+        local map = Game.map and Game.map() or workspace
+        if not map then return end
+        for _, part in ipairs(map:GetDescendants()) do
+            if part:IsA("BasePart") and part.Transparency < 0.9 and not isProtected(part) then
+                if xraySaved[part] == nil then xraySaved[part] = part.Transparency end
+                part.Transparency = S.Visual.XrayTransp
+            end
+        end
+        xrayOn = true
+        xrayValue = S.Visual.XrayTransp
+    end
+
+    local function clearXray()
+        for part, transparency in pairs(xraySaved) do
+            if part.Parent then
+                pcall(function() part.Transparency = transparency end)
+            end
+        end
+        xraySaved = {}
+        xrayOn = false
+    end
+    KH.undo(clearXray)
+
+    -- A new round means a new map model, so re-run rather than tracking parts.
+    if Game.on then
+        Game.on("RoundStart", function()
+            if S.Visual.Xray then
+                task.wait(1)
+                xraySaved = {}
+                applyXray()
+            end
+        end)
+    end
+
+    KH.loop(1, function()
+        -- Also when the slider has moved: the walls are already painted, so
+        -- nothing else would ever notice a new value.
+        if S.Visual.Xray and (not xrayOn or xrayValue ~= S.Visual.XrayTransp) then
+            applyXray()
+        elseif not S.Visual.Xray and xrayOn then
+            clearXray()
+        end
+    end)
+
+    -- ============================================================ LOW DETAIL
+    -- Turns effects off rather than destroying them, so it is fully reversible.
+    local detailSaved = {}
+    local lowDetailOn = false
+    local waterSaved = nil
+
+    local EFFECT_CLASSES = {
+        ParticleEmitter = true, Trail = true, Smoke = true,
+        Fire = true, Sparkles = true, Beam = true,
+    }
+
+    local function applyLowDetail()
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if EFFECT_CLASSES[obj.ClassName] and obj.Enabled then
+                detailSaved[obj] = true
+                obj.Enabled = false
+            end
+        end
+        saveLighting()
+        Lighting.GlobalShadows = false
+        pcall(function()
+            local terrain = workspace.Terrain
+            if not waterSaved then
+                waterSaved = {
+                    size = terrain.WaterWaveSize,
+                    reflectance = terrain.WaterReflectance,
+                }
+            end
+            terrain.WaterWaveSize = 0
+            terrain.WaterReflectance = 0
+        end)
+        lowDetailOn = true
+    end
+
+    local function clearLowDetail()
+        for obj in pairs(detailSaved) do
+            if obj.Parent then pcall(function() obj.Enabled = true end) end
+        end
+        detailSaved = {}
+        -- The water was flattened by hand, so it has to be put back by hand.
+        if waterSaved then
+            pcall(function()
+                workspace.Terrain.WaterWaveSize = waterSaved.size
+                workspace.Terrain.WaterReflectance = waterSaved.reflectance
+            end)
+            waterSaved = nil
+        end
+        lowDetailOn = false
+    end
+    KH.undo(clearLowDetail)
+
+    KH.loop(2, function()
+        if S.Visual.LowDetail and not lowDetailOn then
+            applyLowDetail()
+        elseif S.Visual.LowDetail and lowDetailOn then
+            applyLowDetail() -- catch effects added by the new round
+        elseif not S.Visual.LowDetail and lowDetailOn then
+            clearLowDetail()
+        end
+    end)
+end
+
+-- ─── src/mm2/70_esp.lua ────────────────────────────────────────────
 
 -- ============================================================================
 --  ESP — player boxes/names/tracers/chams plus coin, gun-drop and trap markers
@@ -3459,7 +4112,7 @@ do
     end)
 end
 
--- ─── src/mm2/08_combat.lua ─────────────────────────────────────────────
+-- ─── src/mm2/71_combat.lua ─────────────────────────────────────────
 
 -- ============================================================================
 --  COMBAT — aimbot, silent aim, knife. MM2's gun is server-authoritative: the
@@ -4871,7 +5524,7 @@ do
     end)
 end
 
--- ─── src/mm2/09_farm.lua ───────────────────────────────────────────────
+-- ─── src/mm2/72_farm.lua ───────────────────────────────────────────
 
 -- ============================================================================
 --  FARM — coin collection, the coin magnet, gun-drop grabbing, anti-AFK
@@ -5116,7 +5769,7 @@ do
     end))
 end
 
--- ─── src/mm2/10_safety.lua ─────────────────────────────────────────────
+-- ─── src/mm2/73_safety.lua ─────────────────────────────────────────
 
 -- ============================================================================
 --  SAFETY — murderer proximity warning, auto-dodge, round/role announcements
@@ -5303,250 +5956,17 @@ do
     end)
 end
 
--- ─── src/mm2/11_movement.lua ───────────────────────────────────────────
+-- ─── src/mm2/74_teleports.lua ──────────────────────────────────────
 
 -- ============================================================================
---  MOVEMENT — speed, jump, noclip, fly, spinbot, teleports, waypoints
+--  TELEPORTS — the MM2-specific destinations, on top of shared movement
 -- ============================================================================
 
 do
-    local UI               = KH.UI
-    local U                = KH.U
-    local Game             = KH.Game
-    local S                = KH.S
-    local X                = KH.X
-    local UserInputService = KH.Services.UserInputService
-    local RunService       = KH.Services.RunService
-    local HttpService      = KH.Services.HttpService
-    local LocalPlayer      = KH.LocalPlayer
-
-    local Move = {}
-    KH.Move = Move
-
-    -- ======================================================== SPEED / JUMP
-    -- Re-applied continuously because MM2 resets WalkSpeed on respawn and when
-    -- rounds change; a one-shot assignment silently stops working.
-    function Move.applyHumanoid()
-        local hum = U.myHum()
-        if not hum then return end
-        if S.Move.SpeedEnabled and S.Move.SpeedMode == "Humanoid" then
-            if hum.WalkSpeed ~= S.Move.Speed then hum.WalkSpeed = S.Move.Speed end
-        elseif hum.WalkSpeed ~= 16 and not S.Move.SpeedEnabled then
-            hum.WalkSpeed = 16
-        end
-
-        -- R15 humanoids may be driven by JumpHeight rather than JumpPower;
-        -- writing only JumpPower would silently do nothing on those.
-        if S.Move.JumpEnabled then
-            if hum.UseJumpPower then
-                if hum.JumpPower ~= S.Move.Jump then hum.JumpPower = S.Move.Jump end
-            else
-                local height = S.Move.Jump / 7.5
-                if math.abs(hum.JumpHeight - height) > 0.01 then hum.JumpHeight = height end
-            end
-        else
-            if hum.UseJumpPower then
-                if hum.JumpPower ~= 50 then hum.JumpPower = 50 end
-            elseif math.abs(hum.JumpHeight - 7.2) > 0.01 then
-                hum.JumpHeight = 7.2
-            end
-        end
-    end
-
-    -- CFrame mode drives the character directly, which ignores any server-side
-    -- WalkSpeed clamp — at the cost of looking less natural.
-    KH.onFrame("speed-cframe", function(delta)
-        if not (S.Move.SpeedEnabled and S.Move.SpeedMode == "CFrame") then return end
-        if S.Move.Fly then return end
-        local hum, root = U.myHum(), U.myRoot()
-        if not hum or not root then return end
-        local direction = hum.MoveDirection
-        if direction.Magnitude < 0.05 then return end
-        -- delta comes from the shared render loop; never yield in here.
-        root.CFrame = root.CFrame + direction * (S.Move.Speed - 16) * (delta or 0)
-    end, 60)
-
-    KH.loop(0.4, function() Move.applyHumanoid() end)
-
-    -- ============================================================== NOCLIP
-    -- Original collision states are recorded so disabling noclip restores the
-    -- character exactly, rather than blanket-setting everything collidable.
-    local noclipOriginal = {}
-    local noclipConn
-
-    local function noclipStep()
-        local char = U.charOf(LocalPlayer)
-        if not char then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                if noclipOriginal[part] == nil then noclipOriginal[part] = true end
-                part.CanCollide = false
-            end
-        end
-    end
-
-    function Move.setNoclip(on)
-        S.Move.Noclip = on
-        if on then
-            -- Not KH.track: this is disconnected below and on unload, and
-            -- tracking it would add a dead entry on every single toggle.
-            if not noclipConn then
-                noclipConn = RunService.Stepped:Connect(noclipStep)
-            end
-        else
-            if noclipConn then
-                noclipConn:Disconnect()
-                noclipConn = nil
-            end
-            for part, wasCollidable in pairs(noclipOriginal) do
-                if part.Parent and wasCollidable then
-                    pcall(function() part.CanCollide = true end)
-                end
-            end
-            noclipOriginal = {}
-        end
-        UI.refreshKeybinds()
-    end
-    KH.undo(function() Move.setNoclip(false) end)
-
-    -- ================================================== INFINITE JUMP / BHOP
-    KH.track(UserInputService.JumpRequest:Connect(function()
-        if not S.Move.InfJump then return end
-        local hum = U.myHum()
-        if hum then pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end) end
-    end))
-
-    KH.onFrame("bhop", function()
-        if not S.Move.Bhop then return end
-        if U.typing() then return end
-        if not UserInputService:IsKeyDown(Enum.KeyCode.Space) then return end
-        local hum = U.myHum()
-        if not hum then return end
-        local state = hum:GetState()
-        if state == Enum.HumanoidStateType.Running
-            or state == Enum.HumanoidStateType.Landed
-            or state == Enum.HumanoidStateType.RunningNoPhysics then
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-        end
-    end, 62)
-
-    -- ================================================================= FLY
-    local flyVelocity, flyGyro
-    local flying = false
-
-    local function stopFly()
-        flying = false
-        if flyVelocity then flyVelocity:Destroy(); flyVelocity = nil end
-        if flyGyro then flyGyro:Destroy(); flyGyro = nil end
-        local hum = U.myHum()
-        if hum then hum.PlatformStand = false end
-    end
-
-    local function startFly()
-        local root, hum = U.myRoot(), U.myHum()
-        if not root or not hum then return false end
-        stopFly()
-
-        flyVelocity = Instance.new("BodyVelocity")
-        flyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-        flyVelocity.Velocity = Vector3.zero
-        flyVelocity.Parent = root
-
-        flyGyro = Instance.new("BodyGyro")
-        flyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-        flyGyro.P = 9e4
-        flyGyro.CFrame = root.CFrame
-        flyGyro.Parent = root
-
-        hum.PlatformStand = true
-        flying = true
-        return true
-    end
-
-    function Move.setFly(on)
-        S.Move.Fly = on
-        if on then
-            if not startFly() then
-                S.Move.Fly = false
-                UI.notify({title = "Fly", text = "No character to attach to.", kind = "bad"})
-            end
-        else
-            stopFly()
-        end
-        UI.refreshKeybinds()
-    end
-    KH.undo(function() stopFly() end)
-
-    KH.onFrame("fly", function()
-        if not S.Move.Fly then
-            if flying then stopFly() end
-            return
-        end
-        if not flying or not flyVelocity or not flyVelocity.Parent then
-            if not startFly() then return end
-        end
-
-        local cam = KH.camera()
-        local direction = Vector3.zero
-        -- Hold still while typing rather than reading the chat as flight input.
-        if U.typing() then
-            flyVelocity.Velocity = Vector3.zero
-            flyGyro.CFrame = cam.CFrame
-            return
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - cam.CFrame.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then direction = direction + cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then direction = direction + Vector3.new(0, 1, 0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then direction = direction - Vector3.new(0, 1, 0) end
-
-        if direction.Magnitude > 0 then direction = direction.Unit end
-        flyVelocity.Velocity = direction * S.Move.FlySpeed
-        flyGyro.CFrame = cam.CFrame
-    end, 61)
-
-    -- ============================================================= SPINBOT
-    KH.onFrame("spinbot", function()
-        if not S.Move.Spinbot then return end
-        local root = U.myRoot()
-        if not root then return end
-        root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(28), 0)
-    end, 63)
-
-    -- Respawns wipe all of this, so reapply once the new character settles.
-    KH.track(LocalPlayer.CharacterAdded:Connect(function()
-        task.wait(0.6)
-        Move.applyHumanoid()
-        if S.Move.Noclip then Move.setNoclip(true) end
-        if S.Move.Fly then Move.setFly(true) end
-    end))
-
-    -- =========================================================== TELEPORTS
-    local function tpTo(position, label)
-        if not U.myRoot() then
-            UI.notify({title = "Teleport", text = "No character.", kind = "bad"})
-            return false
-        end
-        U.moveTo(position + Vector3.new(0, 3, 0), true)
-        if label then UI.notify({title = "Teleport", text = label, duration = 2}) end
-        return true
-    end
-    Move.tpTo = tpTo
-
-    local function tpToPlayer(player, label)
-        if not player then
-            UI.notify({title = "Teleport", text = "Nobody to teleport to.", kind = "warn"})
-            return false
-        end
-        local part = U.rootOf(player)
-        if not part then
-            UI.notify({title = "Teleport", text = player.DisplayName .. " has no character.", kind = "warn"})
-            return false
-        end
-        return tpTo(part.Position, label or ("Moved to " .. player.DisplayName))
-    end
-    Move.tpToPlayer = tpToPlayer
+    local UI   = KH.UI
+    local Game = KH.Game
+    local Move = KH.Move
+    local tpTo, tpToPlayer = Move.tpTo, Move.tpToPlayer
 
     function Move.tpMurderer() return tpToPlayer(Game.murdererPlayer(), "Moved to the murderer.") end
     function Move.tpSheriff()  return tpToPlayer(Game.sheriffPlayer(), "Moved to the sheriff.") end
@@ -5596,293 +6016,9 @@ do
         return tpTo(position, "Moved to a random spawn.")
     end
 
-    -- ============================================================ WAYPOINTS
-    -- Their own file, not the settings profile: the reconciler drops keys it
-    -- does not recognise, and waypoint names are never in the schema.
-    local WAYPOINT_FILE = "KittyHub/waypoints.json"
-    Move.Waypoints = {}
-
-    local function loadWaypoints()
-        if not (X.writefile and KH.Config.available) then return end
-        pcall(function()
-            if not isfile(WAYPOINT_FILE) then return end
-            local data = HttpService:JSONDecode(readfile(WAYPOINT_FILE))
-            if typeof(data) == "table" then Move.Waypoints = data end
-        end)
-    end
-
-    local function saveWaypoints()
-        if not (X.writefile and KH.Config.available) then return end
-        pcall(function()
-            writefile(WAYPOINT_FILE, HttpService:JSONEncode(Move.Waypoints))
-        end)
-    end
-    loadWaypoints()
-
-    function Move.saveWaypoint(name)
-        name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if name == "" then
-            UI.notify({title = "Waypoint", text = "Give it a name first.", kind = "warn"})
-            return false
-        end
-        local root = U.myRoot()
-        if not root then return false end
-        local p = root.Position
-        Move.Waypoints[name] = {p.X, p.Y, p.Z}
-        saveWaypoints()
-        UI.notify({title = "Waypoint", text = 'Saved "' .. name .. '".', kind = "good"})
-        return true
-    end
-
-    function Move.gotoWaypoint(name)
-        local entry = Move.Waypoints[name]
-        if not entry then
-            UI.notify({title = "Waypoint", text = "No waypoint called " .. tostring(name) .. ".", kind = "warn"})
-            return false
-        end
-        return tpTo(Vector3.new(entry[1], entry[2], entry[3]), 'Moved to "' .. name .. '".')
-    end
-
-    function Move.deleteWaypoint(name)
-        if Move.Waypoints[name] == nil then return false end
-        Move.Waypoints[name] = nil
-        saveWaypoints()
-        UI.notify({title = "Waypoint", text = 'Deleted "' .. name .. '".'})
-        return true
-    end
-
-    function Move.waypointNames()
-        local names = {}
-        for name in pairs(Move.Waypoints) do names[#names + 1] = name end
-        table.sort(names)
-        return names
-    end
 end
 
--- ─── src/mm2/12_visuals.lua ────────────────────────────────────────────
-
--- ============================================================================
---  VISUALS — fullbright, fog, field of view, x-ray walls, detail stripping
---
---  Every effect here records what it changed and restores it on unload, so
---  unloading the script leaves the game looking exactly as it did before.
--- ============================================================================
-
-do
-    local S        = KH.S
-    local Lighting = KH.Services.Lighting
-    local Game     = KH.Game
-    local Players  = KH.Services.Players
-
-    local Visual = {}
-    KH.Visual = Visual
-
-    -- ========================================================== FULLBRIGHT
-    local lightingSaved = nil
-
-    local function saveLighting()
-        if lightingSaved then return end
-        lightingSaved = {
-            Brightness      = Lighting.Brightness,
-            ClockTime       = Lighting.ClockTime,
-            Ambient         = Lighting.Ambient,
-            OutdoorAmbient  = Lighting.OutdoorAmbient,
-            GlobalShadows   = Lighting.GlobalShadows,
-            FogEnd          = Lighting.FogEnd,
-            FogStart        = Lighting.FogStart,
-            ExposureCompensation = Lighting.ExposureCompensation,
-        }
-    end
-
-    local function restoreLighting()
-        if not lightingSaved then return end
-        for property, value in pairs(lightingSaved) do
-            pcall(function() Lighting[property] = value end)
-        end
-        lightingSaved = nil
-    end
-    KH.undo(restoreLighting)
-
-    -- Atmosphere density is not a Lighting property, so it needs recording
-    -- separately or turning fog off again leaves the map permanently clear.
-    local atmosphereSaved = {}
-
-    local function restoreAtmosphere()
-        for effect, density in pairs(atmosphereSaved) do
-            if effect.Parent then pcall(function() effect.Density = density end) end
-        end
-        atmosphereSaved = {}
-    end
-    KH.undo(restoreAtmosphere)
-
-    -- Reapplied on a timer: MM2 drives its own day/night cycle per round and
-    -- will happily reset Brightness out from under us.
-    KH.loop(0.5, function()
-        if S.Visual.Fullbright then
-            saveLighting()
-            local shade = 128 * math.clamp(S.Visual.Brightness / 2, 0.25, 1.5)
-            Lighting.Brightness = S.Visual.Brightness
-            Lighting.ClockTime = 14
-            Lighting.GlobalShadows = false
-            Lighting.Ambient = Color3.fromRGB(shade, shade, shade)
-            Lighting.OutdoorAmbient = Color3.fromRGB(shade, shade, shade)
-        elseif lightingSaved and not S.Visual.NoFog and not S.Visual.LowDetail then
-            restoreLighting()
-        end
-
-        if S.Visual.NoFog then
-            saveLighting()
-            Lighting.FogEnd = 1e6
-            Lighting.FogStart = 1e6
-            for _, effect in ipairs(Lighting:GetChildren()) do
-                if effect:IsA("Atmosphere") then
-                    if atmosphereSaved[effect] == nil then
-                        atmosphereSaved[effect] = effect.Density
-                    end
-                    pcall(function() effect.Density = 0 end)
-                end
-            end
-        elseif next(atmosphereSaved) then
-            restoreAtmosphere()
-        end
-    end)
-
-    -- ================================================================= FOV
-    KH.onFrame("fov", function()
-        if not S.Visual.FovEnabled then return end
-        local cam = KH.camera()
-        if math.abs(cam.FieldOfView - S.Visual.Fov) > 0.1 then
-            cam.FieldOfView = S.Visual.Fov
-        end
-    end, 70)
-    KH.undo(function()
-        pcall(function() KH.camera().FieldOfView = 70 end)
-    end)
-
-    -- =============================================================== X-RAY
-    -- Only the map. Characters, coins and the dropped gun keep their real
-    -- transparency, or x-ray would hide what you turned it on to see.
-    local xraySaved = {}
-    local xrayOn = false
-    local xrayValue = nil   -- the transparency actually painted on
-
-    local function isProtected(part)
-        -- Anything belonging to a character.
-        local model = part:FindFirstAncestorOfClass("Model")
-        while model do
-            if Players:GetPlayerFromCharacter(model) then return true end
-            model = model:FindFirstAncestorOfClass("Model")
-        end
-        local name = part.Name
-        return name == "GunDrop" or name == "MainCoin" or name == "Trap"
-    end
-
-    local function applyXray()
-        local map = Game.map()
-        if not map then return end
-        for _, part in ipairs(map:GetDescendants()) do
-            if part:IsA("BasePart") and part.Transparency < 0.9 and not isProtected(part) then
-                if xraySaved[part] == nil then xraySaved[part] = part.Transparency end
-                part.Transparency = S.Visual.XrayTransp
-            end
-        end
-        xrayOn = true
-        xrayValue = S.Visual.XrayTransp
-    end
-
-    local function clearXray()
-        for part, transparency in pairs(xraySaved) do
-            if part.Parent then
-                pcall(function() part.Transparency = transparency end)
-            end
-        end
-        xraySaved = {}
-        xrayOn = false
-    end
-    KH.undo(clearXray)
-
-    -- A new round means a new map model, so re-run rather than tracking parts.
-    Game.on("RoundStart", function()
-        if S.Visual.Xray then
-            task.wait(1)
-            xraySaved = {}
-            applyXray()
-        end
-    end)
-
-    KH.loop(1, function()
-        -- Also when the slider has moved: the walls are already painted, so
-        -- nothing else would ever notice a new value.
-        if S.Visual.Xray and (not xrayOn or xrayValue ~= S.Visual.XrayTransp) then
-            applyXray()
-        elseif not S.Visual.Xray and xrayOn then
-            clearXray()
-        end
-    end)
-
-    -- ============================================================ LOW DETAIL
-    -- Turns effects off rather than destroying them, so it is fully reversible.
-    local detailSaved = {}
-    local lowDetailOn = false
-    local waterSaved = nil
-
-    local EFFECT_CLASSES = {
-        ParticleEmitter = true, Trail = true, Smoke = true,
-        Fire = true, Sparkles = true, Beam = true,
-    }
-
-    local function applyLowDetail()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if EFFECT_CLASSES[obj.ClassName] and obj.Enabled then
-                detailSaved[obj] = true
-                obj.Enabled = false
-            end
-        end
-        saveLighting()
-        Lighting.GlobalShadows = false
-        pcall(function()
-            local terrain = workspace.Terrain
-            if not waterSaved then
-                waterSaved = {
-                    size = terrain.WaterWaveSize,
-                    reflectance = terrain.WaterReflectance,
-                }
-            end
-            terrain.WaterWaveSize = 0
-            terrain.WaterReflectance = 0
-        end)
-        lowDetailOn = true
-    end
-
-    local function clearLowDetail()
-        for obj in pairs(detailSaved) do
-            if obj.Parent then pcall(function() obj.Enabled = true end) end
-        end
-        detailSaved = {}
-        -- The water was flattened by hand, so it has to be put back by hand.
-        if waterSaved then
-            pcall(function()
-                workspace.Terrain.WaterWaveSize = waterSaved.size
-                workspace.Terrain.WaterReflectance = waterSaved.reflectance
-            end)
-            waterSaved = nil
-        end
-        lowDetailOn = false
-    end
-    KH.undo(clearLowDetail)
-
-    KH.loop(2, function()
-        if S.Visual.LowDetail and not lowDetailOn then
-            applyLowDetail()
-        elseif S.Visual.LowDetail and lowDetailOn then
-            applyLowDetail() -- catch effects added by the new round
-        elseif not S.Visual.LowDetail and lowDetailOn then
-            clearLowDetail()
-        end
-    end)
-end
-
--- ─── src/mm2/13_menu.lua ───────────────────────────────────────────────
+-- ─── src/mm2/90_menu.lua ───────────────────────────────────────────
 
 -- ============================================================================
 --  MENU — every tab, section and control
@@ -5899,7 +6035,6 @@ do
     local Farm   = KH.Farm
     local Move   = KH.Move
     local Safety = KH.Safety
-    local Config = KH.Config
     local Players = KH.Services.Players
     local LocalPlayer = KH.LocalPlayer
 
@@ -6554,147 +6689,172 @@ do
         refreshList()
     end
 
-    -- ======================================================== SETTINGS TAB
-    do
-        local tab = UI.addTab("Settings")
 
-        local interface = UI.section(tab, "Interface")
-        UI.keybind(interface, opt("UI", "MenuKey", {text = "Menu Key"}))
-        UI.colorpicker(interface, opt("UI", "Accent", {
-            text = "Accent Colour",
-            onSet = function(color) UI.applyAccent(color) end,
-        }))
-        UI.toggle(interface, opt("UI", "Watermark", {
-            text = "Watermark",
-            onSet = function(v) UI.Watermark.Visible = v end,
-        }))
-        UI.toggle(interface, opt("UI", "KeybindList", {
-            text = "Keybind List",
-            onSet = function(v) UI.KeybindPanel.Visible = v end,
-        }))
-        UI.toggle(interface, opt("UI", "Notifications", {text = "Notifications"}))
+    -- Extra rows for the shared Settings tab, which is built after this file.
+    KH.SessionInfo = {
+        {text = "Silent Aim Support", get = function() return Combat.silentStatus() end},
+        {text = "Mouse Control",      get = function() return Combat.Mouse.support() end},
+        {text = "Metamethod Hook",    get = function()
+            if Combat.HookAvailable then return tostring(Combat.SilentRoute) end
+            return "none — " .. (Combat.SilentReason or "not exposed")
+        end},
+    }
 
-        local configs = UI.section(tab, "Configuration")
-        if not Config.available then
-            UI.label(configs, "This executor exposes no file API, so settings only persist until you close Roblox.")
-        else
-            UI.label(configs, "Profiles are stored in the KittyHub/configs folder next to your executor.")
-        end
-        UI.toggle(configs, opt("UI", "AutoSave", {
-            text = "Auto Save",
-            desc = "Write the active profile whenever something changes.",
-        }))
-
-        local profileName = {value = S.UI.Profile}
-        local profileDropdown
-
-        local function refreshProfiles()
-            local names = Config.list()
-            if #names == 0 then names = {"default"} end
-            if profileDropdown then profileDropdown.setOptions(names) end
-        end
-
-        UI.input(configs, {
-            text = "Profile Name",
-            placeholder = "default",
-            get = function() return profileName.value end,
-            set = function(v) profileName.value = v end,
-        })
-        UI.button(configs, {
-            text = "Save Profile",
-            kind = "primary",
-            callback = function()
-                local ok, err = Config.save(profileName.value)
-                if ok then
-                    S.UI.Profile = profileName.value
-                    refreshProfiles()
-                    UI.notify({title = "Config", text = 'Saved "' .. profileName.value .. '".', kind = "good"})
-                else
-                    UI.notify({title = "Config", text = tostring(err), kind = "bad"})
-                end
-            end,
-        })
-        profileDropdown = UI.dropdown(configs, {
-            text = "Saved Profiles",
-            options = {"default"},
-            get = function() return profileName.value end,
-            set = function(v) profileName.value = v end,
-        })
-        UI.button(configs, {
-            text = "Load Profile",
-            callback = function()
-                local ok, err = Config.load(profileName.value)
-                if ok then
-                    UI.refreshAll()
-                    UI.applyAccent(S.UI.Accent)
-                    UI.notify({title = "Config", text = 'Loaded "' .. profileName.value .. '".', kind = "good"})
-                else
-                    UI.notify({title = "Config", text = tostring(err), kind = "bad"})
-                end
-            end,
-        })
-        UI.button(configs, {
-            text = "Delete Profile",
-            kind = "danger",
-            callback = function()
-                Config.delete(profileName.value)
-                refreshProfiles()
-                UI.notify({title = "Config", text = "Deleted."})
-            end,
-        })
-        UI.button(configs, {
-            text = "Reset To Defaults",
-            kind = "danger",
-            callback = function()
-                Config.reset()
-                UI.refreshAll()
-                UI.applyAccent(S.UI.Accent)
-                UI.notify({title = "Config", text = "Settings reset.", kind = "warn"})
-            end,
-        })
-        refreshProfiles()
-
-        local session = UI.section(tab, "Session")
-        UI.readout(session, {text = "Executor", get = function() return KH.X.name end})
-        UI.readout(session, {
-            text = "Silent Aim Support",
-            get = function() return Combat.silentStatus() end,
-        })
-        UI.readout(session, {
-            text = "Mouse Control",
-            get = function() return Combat.Mouse.support() end,
-        })
-        UI.readout(session, {
-            text = "Metamethod Hook",
-            get = function()
-                if Combat.HookAvailable then return tostring(Combat.SilentRoute) end
-                return "none — " .. (Combat.SilentReason or "not exposed")
-            end,
-        })
-        UI.button(session, {
-            text = "Rejoin Server",
-            callback = function() KH.rejoin() end,
-        })
-        UI.button(session, {
-            text = "Server Hop",
-            desc = "Find a different public server for this place.",
-            callback = function() KH.serverHop() end,
-        })
-        UI.button(session, {
-            text = "Unload Kitty Hub",
-            kind = "danger",
-            desc = "Remove the menu and undo every change.",
-            callback = function() KH.unload() end,
-        })
-    end
-
-    UI.selectTab("Aimbot")
+    KH.FirstTab = "Aimbot"
 end
 
--- ─── src/mm2/14_main.lua ───────────────────────────────────────────────
+-- ─── src/_shared/91_settings.lua ───────────────────────────────────
 
 -- ============================================================================
---  MAIN — hotkeys, the single render loop, HUD readouts, and unload
+--  SETTINGS — the tab every build has: interface, profiles, session
+--
+--  Added after the game module's own tabs so it is always last, and it picks up
+--  whatever extra rows that module left in KH.SessionInfo.
+-- ============================================================================
+
+do
+    local UI     = KH.UI
+    local S      = KH.S
+    local Config = KH.Config
+
+    local function opt(group, key, extra)
+        local t = extra or {}
+        local after = t.onSet
+        t.onSet = nil
+        t.get = function() return S[group][key] end
+        t.set = function(value)
+            S[group][key] = value
+            if after then after(value) end
+        end
+        return t
+    end
+
+    local tab = UI.addTab("Settings")
+
+    local interface = UI.section(tab, "Interface")
+    UI.keybind(interface, opt("UI", "MenuKey", {text = "Menu Key"}))
+    UI.colorpicker(interface, opt("UI", "Accent", {
+        text = "Accent Colour",
+        onSet = function(color) UI.applyAccent(color) end,
+    }))
+    UI.toggle(interface, opt("UI", "Watermark", {
+        text = "Watermark",
+        onSet = function(v) UI.Watermark.Visible = v end,
+    }))
+    UI.toggle(interface, opt("UI", "KeybindList", {
+        text = "Keybind List",
+        onSet = function(v) UI.KeybindPanel.Visible = v end,
+    }))
+    UI.toggle(interface, opt("UI", "Notifications", {text = "Notifications"}))
+
+    local configs = UI.section(tab, "Configuration")
+    if not Config.available then
+        UI.label(configs, "This executor exposes no file API, so settings only persist until you close Roblox.")
+    else
+        UI.label(configs, "Profiles are stored in the KittyHub/configs folder next to your executor.")
+    end
+    UI.toggle(configs, opt("UI", "AutoSave", {
+        text = "Auto Save",
+        desc = "Write the active profile whenever something changes.",
+    }))
+
+    local profileName = {value = S.UI.Profile}
+    local profileDropdown
+
+    local function refreshProfiles()
+        local names = Config.list()
+        if #names == 0 then names = {"default"} end
+        if profileDropdown then profileDropdown.setOptions(names) end
+    end
+
+    UI.input(configs, {
+        text = "Profile Name",
+        placeholder = "default",
+        get = function() return profileName.value end,
+        set = function(v) profileName.value = v end,
+    })
+    UI.button(configs, {
+        text = "Save Profile",
+        kind = "primary",
+        callback = function()
+            local ok, err = Config.save(profileName.value)
+            if ok then
+                S.UI.Profile = profileName.value
+                refreshProfiles()
+                UI.notify({title = "Config", text = 'Saved "' .. profileName.value .. '".', kind = "good"})
+            else
+                UI.notify({title = "Config", text = tostring(err), kind = "bad"})
+            end
+        end,
+    })
+    profileDropdown = UI.dropdown(configs, {
+        text = "Saved Profiles",
+        options = {"default"},
+        get = function() return profileName.value end,
+        set = function(v) profileName.value = v end,
+    })
+    UI.button(configs, {
+        text = "Load Profile",
+        callback = function()
+            local ok, err = Config.load(profileName.value)
+            if ok then
+                UI.refreshAll()
+                UI.applyAccent(S.UI.Accent)
+                UI.notify({title = "Config", text = 'Loaded "' .. profileName.value .. '".', kind = "good"})
+            else
+                UI.notify({title = "Config", text = tostring(err), kind = "bad"})
+            end
+        end,
+    })
+    UI.button(configs, {
+        text = "Delete Profile",
+        kind = "danger",
+        callback = function()
+            Config.delete(profileName.value)
+            refreshProfiles()
+            UI.notify({title = "Config", text = "Deleted."})
+        end,
+    })
+    UI.button(configs, {
+        text = "Reset To Defaults",
+        kind = "danger",
+        callback = function()
+            Config.reset()
+            UI.refreshAll()
+            UI.applyAccent(S.UI.Accent)
+            UI.notify({title = "Config", text = "Settings reset.", kind = "warn"})
+        end,
+    })
+    refreshProfiles()
+
+    local session = UI.section(tab, "Session")
+    UI.readout(session, {text = "Executor", get = function() return KH.X.name end})
+    for _, row in ipairs(KH.SessionInfo or {}) do
+        UI.readout(session, row)
+    end
+    UI.button(session, {
+        text = "Rejoin Server",
+        callback = function() KH.rejoin() end,
+    })
+    UI.button(session, {
+        text = "Server Hop",
+        desc = "Find a different public server for this place.",
+        callback = function() KH.serverHop() end,
+    })
+    UI.button(session, {
+        text = "Unload Kitty Hub",
+        kind = "danger",
+        desc = "Remove the menu and undo every change.",
+        callback = function() KH.unload() end,
+    })
+
+    UI.selectTab(KH.FirstTab or (next(UI.Tabs)))
+end
+
+-- ─── src/mm2/92_main.lua ───────────────────────────────────────────
+
+-- ============================================================================
+--  MAIN — hotkeys, HUD readouts, and boot
 -- ============================================================================
 
 do
@@ -6707,11 +6867,7 @@ do
     local Move             = KH.Move
     local Safety           = KH.Safety
     local Config           = KH.Config
-    local RunService       = KH.Services.RunService
     local UserInputService = KH.Services.UserInputService
-    local TeleportService  = KH.Services.TeleportService
-    local HttpService      = KH.Services.HttpService
-    local LocalPlayer      = KH.LocalPlayer
 
     -- =============================================================== HOTKEYS
     UI.registerKeybind("Menu", function() return S.UI.MenuKey end, function() return UI.IsOpen end)
@@ -6770,19 +6926,6 @@ do
                 -- render loop while the key is down; Press is done here.
                 Combat.fireOnce(true)
             end
-        end
-    end))
-
-    -- ============================================================ RENDER LOOP
-    -- One connection drives every per-frame job. Each is pcall-wrapped, so a
-    -- feature that breaks cannot take the rest of the menu down with it.
-    KH.track(RunService.RenderStepped:Connect(function(delta)
-        if not KH.Alive then return end
-        KH.camera()
-        local jobs = KH.Frame
-        for i = 1, #jobs do
-            local job = jobs[i]
-            KH.safe(job.name, job.fn, delta)
         end
     end))
 
@@ -6856,82 +6999,6 @@ do
         end
     end)
 
-    -- ============================================================== SESSION
-    function KH.rejoin()
-        UI.notify({title = "Rejoin", text = "Teleporting…"})
-        pcall(function()
-            TeleportService:Teleport(game.PlaceId, LocalPlayer)
-        end)
-    end
-
-    function KH.serverHop()
-        KH.detach(function()
-            UI.notify({title = "Server Hop", text = "Looking for a server…"})
-            local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100")
-                :format(game.PlaceId)
-
-            local ok, body = pcall(function() return game:HttpGet(url) end)
-            if not ok then
-                UI.notify({title = "Server Hop", text = "Could not reach the server list.", kind = "bad"})
-                return
-            end
-
-            local decoded, data = pcall(function() return HttpService:JSONDecode(body) end)
-            if not decoded or typeof(data) ~= "table" or typeof(data.data) ~= "table" then
-                UI.notify({title = "Server Hop", text = "Server list was unreadable.", kind = "bad"})
-                return
-            end
-
-            local candidates = {}
-            for _, server in ipairs(data.data) do
-                if typeof(server) == "table"
-                    and server.id ~= game.JobId
-                    and typeof(server.playing) == "number"
-                    and typeof(server.maxPlayers) == "number"
-                    and server.playing < server.maxPlayers then
-                    candidates[#candidates + 1] = server.id
-                end
-            end
-
-            if #candidates == 0 then
-                UI.notify({title = "Server Hop", text = "No other servers with room.", kind = "warn"})
-                return
-            end
-
-            local pick = candidates[math.random(1, #candidates)]
-            pcall(function()
-                TeleportService:TeleportToPlaceInstance(game.PlaceId, pick, LocalPlayer)
-            end)
-        end)
-    end
-
-    -- =============================================================== UNLOAD
-    function KH.unload()
-        if not KH.Alive then return end
-        KH.Alive = false
-
-        -- Undo world changes first, while our instances still exist.
-        for _, restore in ipairs(KH.Undo) do pcall(restore) end
-        for _, conn in ipairs(KH.Conn) do pcall(function() conn:Disconnect() end) end
-
-        local current = coroutine.running()
-        for _, thread in ipairs(KH.Thread) do
-            if thread ~= current then pcall(task.cancel, thread) end
-        end
-
-        for _, inst in ipairs(KH.Inst) do pcall(function() inst:Destroy() end) end
-
-        local env = (type(getgenv) == "function" and getgenv()) or _G
-        env.KittyHubCleanup = nil
-        env.KittyHub = nil
-        print("[Kitty Hub] Unloaded.")
-    end
-
-    do
-        local env = (type(getgenv) == "function" and getgenv()) or _G
-        env.KittyHubCleanup = KH.unload
-    end
-
     -- ================================================================ BOOT
     if Config.available then
         local ok = Config.load(S.UI.Profile)
@@ -6974,7 +7041,7 @@ do
         :format(S.UI.MenuKey, S.Aim.Key, S.Move.NoclipKey, S.Move.FlyKey, S.Knife.ThrowKey))
 end
 
--- ─── src/mm2/15_probe.lua ──────────────────────────────────────────────
+-- ─── src/mm2/94_probe.lua ──────────────────────────────────────────
 
 -- ============================================================================
 --  PROBE — the diagnostics tab. Everything the mouse aim rests on but cannot
@@ -7251,7 +7318,7 @@ do
     end)
 end
 
--- ─── src/mm2/16_logo.lua ───────────────────────────────────────────────
+-- ─── src/_shared/96_logo.lua ───────────────────────────────────────
 
 -- ============================================================================
 --  LOGO — the Kitty Hub mark, carried in the script rather than fetched.
@@ -7708,7 +7775,7 @@ wjc4+/dt06PQ/w+9aMORIQYfEwAAAABJRU5ErkJggg==]]
     end
 end
 
--- ─── src/mm2/17_splash.lua ─────────────────────────────────────────────
+-- ─── src/_shared/98_splash.lua ─────────────────────────────────────
 
 -- ============================================================================
 --  SPLASH — the load-in screen.
@@ -7830,7 +7897,7 @@ do
         end
 
         fading(make("TextLabel", {
-            Text = "Murder Mystery 2",
+            Text = KH.GameName or "Roblox",
             Font = Enum.Font.Gotham,
             TextSize = 12,
             TextColor3 = C.TextDim,

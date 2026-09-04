@@ -13,7 +13,6 @@ do
     local Farm   = KH.Farm
     local Move   = KH.Move
     local Safety = KH.Safety
-    local Config = KH.Config
     local Players = KH.Services.Players
     local LocalPlayer = KH.LocalPlayer
 
@@ -668,139 +667,16 @@ do
         refreshList()
     end
 
-    -- ======================================================== SETTINGS TAB
-    do
-        local tab = UI.addTab("Settings")
 
-        local interface = UI.section(tab, "Interface")
-        UI.keybind(interface, opt("UI", "MenuKey", {text = "Menu Key"}))
-        UI.colorpicker(interface, opt("UI", "Accent", {
-            text = "Accent Colour",
-            onSet = function(color) UI.applyAccent(color) end,
-        }))
-        UI.toggle(interface, opt("UI", "Watermark", {
-            text = "Watermark",
-            onSet = function(v) UI.Watermark.Visible = v end,
-        }))
-        UI.toggle(interface, opt("UI", "KeybindList", {
-            text = "Keybind List",
-            onSet = function(v) UI.KeybindPanel.Visible = v end,
-        }))
-        UI.toggle(interface, opt("UI", "Notifications", {text = "Notifications"}))
+    -- Extra rows for the shared Settings tab, which is built after this file.
+    KH.SessionInfo = {
+        {text = "Silent Aim Support", get = function() return Combat.silentStatus() end},
+        {text = "Mouse Control",      get = function() return Combat.Mouse.support() end},
+        {text = "Metamethod Hook",    get = function()
+            if Combat.HookAvailable then return tostring(Combat.SilentRoute) end
+            return "none — " .. (Combat.SilentReason or "not exposed")
+        end},
+    }
 
-        local configs = UI.section(tab, "Configuration")
-        if not Config.available then
-            UI.label(configs, "This executor exposes no file API, so settings only persist until you close Roblox.")
-        else
-            UI.label(configs, "Profiles are stored in the KittyHub/configs folder next to your executor.")
-        end
-        UI.toggle(configs, opt("UI", "AutoSave", {
-            text = "Auto Save",
-            desc = "Write the active profile whenever something changes.",
-        }))
-
-        local profileName = {value = S.UI.Profile}
-        local profileDropdown
-
-        local function refreshProfiles()
-            local names = Config.list()
-            if #names == 0 then names = {"default"} end
-            if profileDropdown then profileDropdown.setOptions(names) end
-        end
-
-        UI.input(configs, {
-            text = "Profile Name",
-            placeholder = "default",
-            get = function() return profileName.value end,
-            set = function(v) profileName.value = v end,
-        })
-        UI.button(configs, {
-            text = "Save Profile",
-            kind = "primary",
-            callback = function()
-                local ok, err = Config.save(profileName.value)
-                if ok then
-                    S.UI.Profile = profileName.value
-                    refreshProfiles()
-                    UI.notify({title = "Config", text = 'Saved "' .. profileName.value .. '".', kind = "good"})
-                else
-                    UI.notify({title = "Config", text = tostring(err), kind = "bad"})
-                end
-            end,
-        })
-        profileDropdown = UI.dropdown(configs, {
-            text = "Saved Profiles",
-            options = {"default"},
-            get = function() return profileName.value end,
-            set = function(v) profileName.value = v end,
-        })
-        UI.button(configs, {
-            text = "Load Profile",
-            callback = function()
-                local ok, err = Config.load(profileName.value)
-                if ok then
-                    UI.refreshAll()
-                    UI.applyAccent(S.UI.Accent)
-                    UI.notify({title = "Config", text = 'Loaded "' .. profileName.value .. '".', kind = "good"})
-                else
-                    UI.notify({title = "Config", text = tostring(err), kind = "bad"})
-                end
-            end,
-        })
-        UI.button(configs, {
-            text = "Delete Profile",
-            kind = "danger",
-            callback = function()
-                Config.delete(profileName.value)
-                refreshProfiles()
-                UI.notify({title = "Config", text = "Deleted."})
-            end,
-        })
-        UI.button(configs, {
-            text = "Reset To Defaults",
-            kind = "danger",
-            callback = function()
-                Config.reset()
-                UI.refreshAll()
-                UI.applyAccent(S.UI.Accent)
-                UI.notify({title = "Config", text = "Settings reset.", kind = "warn"})
-            end,
-        })
-        refreshProfiles()
-
-        local session = UI.section(tab, "Session")
-        UI.readout(session, {text = "Executor", get = function() return KH.X.name end})
-        UI.readout(session, {
-            text = "Silent Aim Support",
-            get = function() return Combat.silentStatus() end,
-        })
-        UI.readout(session, {
-            text = "Mouse Control",
-            get = function() return Combat.Mouse.support() end,
-        })
-        UI.readout(session, {
-            text = "Metamethod Hook",
-            get = function()
-                if Combat.HookAvailable then return tostring(Combat.SilentRoute) end
-                return "none — " .. (Combat.SilentReason or "not exposed")
-            end,
-        })
-        UI.button(session, {
-            text = "Rejoin Server",
-            callback = function() KH.rejoin() end,
-        })
-        UI.button(session, {
-            text = "Server Hop",
-            desc = "Find a different public server for this place.",
-            callback = function() KH.serverHop() end,
-        })
-        UI.button(session, {
-            text = "Unload Kitty Hub",
-            kind = "danger",
-            desc = "Remove the menu and undo every change.",
-            callback = function() KH.unload() end,
-        })
-    end
-
-    UI.selectTab("Aimbot")
+    KH.FirstTab = "Aimbot"
 end

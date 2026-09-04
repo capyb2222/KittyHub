@@ -26,11 +26,13 @@ $ErrorActionPreference = 'Stop'
 
 $Root = $PSScriptRoot
 $SrcDir = Join-Path $Root 'src'
+$SharedDir = Join-Path $SrcDir '_shared'
 $AutoBuild = -not $NoBuild
 
 $Titles = @{
-    'mm2'     = 'Murder Mystery 2 Script'
-    'generic' = 'Universal fallback module'
+    'mm2'       = 'Murder Mystery 2 Script'
+    'jailbreak' = 'Jailbreak Script'
+    'generic'   = 'Universal fallback module'
 }
 
 # Kept identical to build.py's BANNER so either builder produces the same file.
@@ -84,16 +86,28 @@ function Get-ModuleVersion($Files) {
     return '0.0.0'
 }
 
-function Build-Module([string]$Name) {
+function Get-ModuleSources([string]$Name) {
+    # Shared sources plus the module's own, ordered by their numeric prefix.
     $moduleDir = Join-Path $SrcDir $Name
-    $files = @(Get-ChildItem -LiteralPath $moduleDir -Filter '*.lua' -File | Sort-Object Name)
-    if ($files.Count -eq 0) { throw "no .lua sources in $moduleDir" }
+    if (-not (Test-Path -LiteralPath $moduleDir -PathType Container)) { return @() }
+    $own = @(Get-ChildItem -LiteralPath $moduleDir -Filter '*.lua' -File)
+    $shared = @()
+    if (Test-Path -LiteralPath $SharedDir -PathType Container) {
+        $shared = @(Get-ChildItem -LiteralPath $SharedDir -Filter '*.lua' -File)
+    }
+    return @(($own + $shared) | Sort-Object Name)
+}
+
+function Build-Module([string]$Name) {
+    $files = @(Get-ModuleSources $Name)
+    if ($files.Count -eq 0) { throw "no .lua sources for module $Name" }
 
     $dash = [string][char]0x2500
     $parts = foreach ($file in $files) {
         $text = (Read-LuaText $file.FullName).TrimEnd()
-        "-- $dash$dash$dash src/$Name/$($file.Name) " +
-        ($dash * [Math]::Max(0, 58 - $file.Name.Length)) + "`n`n$text`n"
+        $label = "$($file.Directory.Name)/$($file.Name)"
+        "-- $dash$dash$dash src/$label " +
+        ($dash * [Math]::Max(0, 58 - $label.Length)) + "`n`n$text`n"
     }
     $body = $parts -join "`n"
 
@@ -123,13 +137,13 @@ function Build-Module([string]$Name) {
 }
 
 function Test-StaleModule([string]$Name) {
-    # True when src/<name>/ has changed since <name>.lua was last built.
+    # True when src/<name>/ or src/_shared/ changed since <name>.lua was built.
     $moduleDir = Join-Path $SrcDir $Name
     $built = Join-Path $Root "$Name.lua"
     if (-not (Test-Path -LiteralPath $moduleDir -PathType Container)) { return $false }
     if (-not (Test-Path -LiteralPath $built -PathType Leaf)) { return $true }
 
-    $newest = Get-ChildItem -LiteralPath $moduleDir -Filter '*.lua' -File |
+    $newest = Get-ModuleSources $Name |
         Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     if (-not $newest) { return $false }
     return $newest.LastWriteTimeUtc -gt (Get-Item -LiteralPath $built).LastWriteTimeUtc

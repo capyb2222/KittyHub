@@ -29,7 +29,7 @@ end
 -- file-level locals: the build concatenates every source into a single chunk,
 -- and a chunk's main body is capped at 200 active locals.
 local KH = {
-    Version = "3.0.0",
+    Version = "3.1.0",
     Conn    = {}, -- RBXScriptConnections   -> disconnected on unload
     Inst    = {}, -- Instances we created   -> destroyed on unload
     Thread  = {}, -- task threads           -> cancelled on unload

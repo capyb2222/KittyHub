@@ -4,7 +4,7 @@
 
 <h1 align="center">Kitty Hub</h1>
 
-<p align="center">Messy MM2 script. Many features are broken, so see what works for you.</p>
+<p align="center">Messy Roblox scripts. Many features are broken, so see what works for you.</p>
 
 
 ## Loadstring
@@ -14,42 +14,18 @@
 loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua"))()
 ```
 
-## Features
+Same line for both games, it picks the right one from the PlaceId.
 
-- **Aimbot**
-- **ESP**
-- **World markers**
-- **Coin farm** 
-- **Murderer alert**
-- **Auto dodge (?)**
-- **Role reveal**
-- **Murderer stuff**
-- **Movements**
-- **Teleports**
-- **Visuals**
-- **Players**
-- **Config profiles**
-- **And more!**
+## Games
 
-Silent aim might not work, so you can try the mouse one (it should work pretty well)
-
-## Keys
-
-| Key | |
-|---|---|
-| `X` | menu |
-| `C` | aim and shoot |
-| `N` | noclip |
-| `F` | fly (WASD, space up, shift down) |
-| `G` | throw the knife once, at the sheriff if one is in range (needs Auto Throw on) |
-
-Rebindable in the menu.
+- [Murder Mystery 2](src/mm2/README.md) — aimbot, ESP, coin farm, murderer stuff
+- [Jailbreak](src/jailbreak/README.md) — auto rob, arrest all, auto farm, ESP
 
 ## Running it
 
 ```bash
-git clone https://github.com/capyb2222/mm2-script.git
-cd mm2-script
+git clone https://github.com/capyb2222/KittyHub.git
+cd KittyHub
 python localhost.py
 ```
 
@@ -64,11 +40,21 @@ Re-running unloads the old copy first.
 
 ## Editing it
 
-`mm2.lua` is generated. Sources are in `src/mm2/`, joined by `build.py`.
+`mm2.lua` and `jailbreak.lua` are generated. Sources are in `src/`, joined by `build.py`.
+
+```
+src/_shared/     UI, config, movement, visuals — both games use these
+src/mm2/         MM2 only
+src/jailbreak/   Jailbreak only
+```
+
+Every file is numbered, and a build is `_shared` plus the game's folder sorted by that
+number, so the two mix together.
 
 ```bash
-python build.py mm2      # rebuild
-python build.py --check  # rebuild and syntax check
+python build.py             # rebuild both
+python build.py jailbreak   # just one
+python build.py --check     # rebuild and syntax check
 ```
 
 Per-frame features go through `KH.onFrame` and must not yield. Module bodies are wrapped
