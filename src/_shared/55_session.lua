@@ -24,6 +24,31 @@ do
 
 
     -- ============================================================== SESSION
+    -- The places this hub has a module for. Switching between them from inside
+    -- the menu queues the loader first, so an executor that refuses to attach
+    -- to the destination still ends up running there — it is already in the
+    -- process, and the queue survives the teleport.
+    KH.Games = {
+        {name = "Murder Mystery 2", place = 142823291},
+        {name = "Jailbreak",        place = 606849621},
+    }
+
+    function KH.goToGame(placeId)
+        if typeof(placeId) ~= "number" or placeId == game.PlaceId then return end
+        local env = (type(getgenv) == "function" and getgenv()) or _G
+        local queued = type(env.KittyHubQueue) == "function" and env.KittyHubQueue() == true
+
+        UI.notify({
+            title = "Switching Game",
+            text = queued and "Queued — it will load itself when you land."
+                or "This executor cannot queue; run the loadstring again on arrival.",
+            kind = queued and "good" or "warn",
+            duration = 6,
+        })
+        task.wait(1)
+        pcall(function() TeleportService:Teleport(placeId, LocalPlayer) end)
+    end
+
     function KH.rejoin()
         UI.notify({title = "Rejoin", text = "Teleporting…"})
         pcall(function()

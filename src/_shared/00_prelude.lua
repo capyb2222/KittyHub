@@ -135,7 +135,8 @@ X.mousemove     = type(mousemoverel) == "function" or type(mousemoveabs) == "fun
 X.mouseclick    = type(mouse1click) == "function"
     or (type(mouse1press) == "function" and type(mouse1release) == "function")
 X.setclipboard  = type(setclipboard) == "function"
-X.queueteleport = type(queue_on_teleport) == "function" or type(syn) == "table"
+X.queueteleport = type(queue_on_teleport) == "function"
+    or (type(syn) == "table" and type(syn.queue_on_teleport) == "function")
 X.identifyexec  = type(identifyexecutor) == "function"
 X.name = X.identifyexec and select(1, identifyexecutor()) or "Unknown"
 KH.X = X

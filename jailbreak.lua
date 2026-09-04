@@ -8,7 +8,7 @@
 --   ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝      ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
 --
 --   Jailbreak Script
---   build 3.1.0+3b3bce71  ·  2026-09-04 01:12 UTC
+--   build 3.1.0+1230a5b6  ·  2026-09-04 01:19 UTC
 --
 --   GENERATED FILE — do not edit directly.
 --   Sources live in src/jailbreak/ ; rebuild with `python build.py`.
@@ -154,7 +154,8 @@ X.mousemove     = type(mousemoverel) == "function" or type(mousemoveabs) == "fun
 X.mouseclick    = type(mouse1click) == "function"
     or (type(mouse1press) == "function" and type(mouse1release) == "function")
 X.setclipboard  = type(setclipboard) == "function"
-X.queueteleport = type(queue_on_teleport) == "function" or type(syn) == "table"
+X.queueteleport = type(queue_on_teleport) == "function"
+    or (type(syn) == "table" and type(syn.queue_on_teleport) == "function")
 X.identifyexec  = type(identifyexecutor) == "function"
 X.name = X.identifyexec and select(1, identifyexecutor()) or "Unknown"
 KH.X = X
@@ -2753,6 +2754,31 @@ do
 
 
     -- ============================================================== SESSION
+    -- The places this hub has a module for. Switching between them from inside
+    -- the menu queues the loader first, so an executor that refuses to attach
+    -- to the destination still ends up running there — it is already in the
+    -- process, and the queue survives the teleport.
+    KH.Games = {
+        {name = "Murder Mystery 2", place = 142823291},
+        {name = "Jailbreak",        place = 606849621},
+    }
+
+    function KH.goToGame(placeId)
+        if typeof(placeId) ~= "number" or placeId == game.PlaceId then return end
+        local env = (type(getgenv) == "function" and getgenv()) or _G
+        local queued = type(env.KittyHubQueue) == "function" and env.KittyHubQueue() == true
+
+        UI.notify({
+            title = "Switching Game",
+            text = queued and "Queued — it will load itself when you land."
+                or "This executor cannot queue; run the loadstring again on arrival.",
+            kind = queued and "good" or "warn",
+            duration = 6,
+        })
+        task.wait(1)
+        pcall(function() TeleportService:Teleport(placeId, LocalPlayer) end)
+    end
+
     function KH.rejoin()
         UI.notify({title = "Rejoin", text = "Teleporting…"})
         pcall(function()
@@ -4934,6 +4960,38 @@ do
     for _, row in ipairs(KH.SessionInfo or {}) do
         UI.readout(session, row)
     end
+    UI.readout(session, {
+        text = "Teleport Queue",
+        get = function() return KH.X.queueteleport and "supported" or "not supported" end,
+    })
+
+    -- Only the games this build is not already in.
+    local elsewhere = {}
+    for _, entry in ipairs(KH.Games) do
+        if entry.place ~= game.PlaceId then elsewhere[#elsewhere + 1] = entry end
+    end
+    if #elsewhere > 0 then
+        local going = {name = elsewhere[1].name}
+        local names = {}
+        for _, entry in ipairs(elsewhere) do names[#names + 1] = entry.name end
+
+        UI.dropdown(session, {
+            text = "Switch Game",
+            options = names,
+            get = function() return going.name end,
+            set = function(v) going.name = v end,
+        })
+        UI.button(session, {
+            text = "Go There",
+            desc = "Queues the hub before teleporting, so it loads itself on arrival — for when your executor will not attach to that game.",
+            callback = function()
+                for _, entry in ipairs(elsewhere) do
+                    if entry.name == going.name then KH.goToGame(entry.place) end
+                end
+            end,
+        })
+    end
+
     UI.button(session, {
         text = "Rejoin Server",
         callback = function() KH.rejoin() end,

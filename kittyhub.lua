@@ -90,6 +90,47 @@ local function loadModule(name)
     return false
 end
 
+-- ------------------------------------------------------------------- queue
+-- Some executors will not attach to a heavy place. The way in is to attach
+-- somewhere they will, run this, and let the queue carry it across the
+-- teleport — the executor is already inside the process by then.
+local function queueFunction()
+    if type(queue_on_teleport) == "function" then return queue_on_teleport end
+    if type(syn) == "table" and type(syn.queue_on_teleport) == "function" then
+        return syn.queue_on_teleport
+    end
+    return nil
+end
+
+local function quoted(list)
+    local parts = {}
+    for _, host in ipairs(list) do parts[#parts + 1] = ("%q"):format(host) end
+    return table.concat(parts, ", ")
+end
+
+-- The queued chunk cannot close over anything here, so it carries its own copy
+-- of the host list and re-fetches the loader on the other side.
+local function queueAcrossTeleport()
+    local queue = queueFunction()
+    if not queue then return false end
+
+    local source = ([[
+local hosts = {%s}
+for _, host in ipairs(hosts) do
+    local ok, body = pcall(function()
+        return game:HttpGet(host .. "/kittyhub.lua?q=" .. tostring(math.random(100000, 999999)), true)
+    end)
+    if ok and type(body) == "string" and #body > 0 and not body:lower():find("<html") then
+        local chunk = loadstring(body, "=kittyhub.lua")
+        if chunk then pcall(chunk) return end
+    end
+end
+]]):format(quoted(HOSTS))
+
+    return (pcall(queue, source))
+end
+env.KittyHubQueue = queueAcrossTeleport
+
 -- -------------------------------------------------------------------- start
 -- Re-running is supported: the module tears its own previous instance down via
 -- getgenv().KittyHubCleanup before building a new one.
@@ -99,4 +140,11 @@ end
 
 local moduleName = MODULES[game.PlaceId] or FALLBACK
 log(("place %d -> %s.lua"):format(game.PlaceId, moduleName))
-loadModule(moduleName)
+
+if loadModule(moduleName) then
+    if queueAcrossTeleport() then
+        log("queued for the next teleport — you will not need to attach again")
+    else
+        log("this executor has no queue_on_teleport; a teleport needs a fresh run")
+    end
+end

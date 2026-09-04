@@ -19,6 +19,9 @@ PlaceId 606849621. Builds to `jailbreak.lua`.
 
 Never tested in game, so expect some of it to be off.
 
+Xeno often will not attach here. Join MM2 instead, run the loadstring, then
+Settings → Switch Game → Jailbreak. It queues itself over the teleport.
+
 It flies instead of teleporting, because Jailbreak does not like big jumps. Turn the
 speed down in Travel if you get pulled back.
 

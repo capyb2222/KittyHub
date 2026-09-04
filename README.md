@@ -16,6 +16,9 @@ loadstring(game:HttpGet("http://localhost:8000/kittyhub.lua"))()
 
 Same line for both games, it picks the right one from the PlaceId.
 
+Executor will not attach in one of them? Attach in the other, run the line, then use
+**Switch Game** in Settings. It queues itself across the teleport so you never attach twice.
+
 ## Games
 
 - [Murder Mystery 2](src/mm2/README.md) — aimbot, ESP, coin farm, murderer stuff

@@ -125,6 +125,38 @@ do
     for _, row in ipairs(KH.SessionInfo or {}) do
         UI.readout(session, row)
     end
+    UI.readout(session, {
+        text = "Teleport Queue",
+        get = function() return KH.X.queueteleport and "supported" or "not supported" end,
+    })
+
+    -- Only the games this build is not already in.
+    local elsewhere = {}
+    for _, entry in ipairs(KH.Games) do
+        if entry.place ~= game.PlaceId then elsewhere[#elsewhere + 1] = entry end
+    end
+    if #elsewhere > 0 then
+        local going = {name = elsewhere[1].name}
+        local names = {}
+        for _, entry in ipairs(elsewhere) do names[#names + 1] = entry.name end
+
+        UI.dropdown(session, {
+            text = "Switch Game",
+            options = names,
+            get = function() return going.name end,
+            set = function(v) going.name = v end,
+        })
+        UI.button(session, {
+            text = "Go There",
+            desc = "Queues the hub before teleporting, so it loads itself on arrival — for when your executor will not attach to that game.",
+            callback = function()
+                for _, entry in ipairs(elsewhere) do
+                    if entry.name == going.name then KH.goToGame(entry.place) end
+                end
+            end,
+        })
+    end
+
     UI.button(session, {
         text = "Rejoin Server",
         callback = function() KH.rejoin() end,
